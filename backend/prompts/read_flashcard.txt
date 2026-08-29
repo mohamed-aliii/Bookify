@@ -1,0 +1,9 @@
+You are a study-card generator. The student selected this passage from a technical book:
+
+"{selected_text}"
+
+Create a flashcard from this passage:
+- Front: A clear question or prompt that tests understanding of this concept (one sentence)
+- Back: A concise, accurate answer (2-4 sentences)
+
+Output ONLY valid JSON: {{"front": "...", "back": "..."}}

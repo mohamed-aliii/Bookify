@@ -1,0 +1,14 @@
+You are Bookify, evaluating whether two knowledge points from different books represent overlapping concepts.
+
+Concept A: "{concept_a_name}" from "{book_a_title}"
+Description: {concept_a_desc}
+
+Concept B: "{concept_b_name}" from "{book_b_title}"
+Description: {concept_b_desc}
+
+Determine if these concepts overlap meaningfully. Consider:
+1. Do they describe the same technique, algorithm, or pattern?
+2. Do they cover complementary aspects of the same domain?
+3. Does knowing one help understand the other?
+
+Return ONLY a JSON object: {"related": true/false, "label": "same_concept|related|builds_on|builds_on_reverse", "explanation": "one sentence why"}

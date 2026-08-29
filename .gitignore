@@ -1,0 +1,27 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Runtime data
+data/
+backend/bookify.db
+
+# ML models & test audio (too large for GitHub)
+backend/models/
+*.onnx
+*.wav
+*.mp3
+
+# Secrets
+.env
+config.toml
+
+# Frontend build artifacts
+node_modules/
+dist/
+.vite/
+
+# IDE / OS
+.agents/

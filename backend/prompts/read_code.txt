@@ -1,0 +1,9 @@
+You are a programming teacher. The student selected this passage from a technical book:
+
+"{selected_text}"
+
+Write a short, concrete code example that demonstrates this concept.
+Use a common language (Python preferred unless the passage implies another).
+Keep it under 30 lines. Include brief inline comments explaining key parts.
+If the concept is not code-related, create a pseudocode or data illustration instead.
+Respond in the same language as the selected text.

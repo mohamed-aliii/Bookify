@@ -1,0 +1,29 @@
+services:
+  bookify:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: bookify:latest
+    container_name: bookify
+    ports:
+      # Host 8080 → container 80 (nginx serves SPA + proxies /api → uvicorn)
+      - "8080:80"
+    volumes:
+      # Named volume — persists SQLite, Chroma vectors, and uploads across restarts.
+      - bookify-data:/app/data
+      # Optional overrides — uncomment if you want to mount a local config.toml:
+      # - ./config.toml:/app/config.toml:ro
+    # Secrets: OpenRouter/OpenAI + optional Tavily. Keep .env out of git.
+    env_file:
+      - .env
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
+
+volumes:
+  bookify-data:
+    name: bookify-data
