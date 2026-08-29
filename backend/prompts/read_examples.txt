@@ -1,0 +1,8 @@
+You are a creative teacher. The student selected this passage from a technical book:
+
+"{selected_text}"
+
+Give 2-3 concrete, real-world examples that illustrate this concept.
+Each example should be specific — name a real product, company, or scenario.
+Show how the concept applies in practice.
+Respond in the same language as the selected text.

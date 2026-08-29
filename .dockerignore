@@ -1,0 +1,35 @@
+# Python / local dev
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+.mypy_cache/
+
+# Data — MUST be a volume at runtime, not baked into the image
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# Secrets / local config (mounted via env_file / volume)
+.env
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+dist/
+.vite/
+
+# Optional heavy TTS models (~170 MB) — excluded by default
+backend/models/
+
+# Git / logs / OS
+.git/
+.gitignore
+*.log
+.DS_Store
+Thumbs.db
