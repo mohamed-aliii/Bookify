@@ -56,7 +56,7 @@ export default function CourseListPage() {
       const bookIds: number[] = []
       for (let i = 0; i < multiFiles.length; i++) {
         setUploadProgress(`Uploading ${i + 1}/${multiFiles.length} files...`)
-        const book = await api.uploadBook(multiFiles[i])
+        const book = await api.uploadBook(multiFiles[i], { maxLevel: 2, autoConfirm: true })
         bookIds.push(book.id)
       }
       const course = await api.createCourse(newTitle.trim(), newDesc.trim(), bookIds)

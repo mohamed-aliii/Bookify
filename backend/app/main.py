@@ -32,9 +32,14 @@ async def lifespan(app: FastAPI):
                 from fastapi import BackgroundTasks
 
                 with SessionLocal() as db:
+                    from .models import CourseBook
                     candidates = list(db.scalars(select(Book).where(Book.ingestion_max_level == 3, Book.status == "ready")))
+                    # Exclude books that belong to a course (courses use L1+L2 only)
+                    course_book_ids = set(db.scalars(select(CourseBook.book_id)).all())
                     to_reindex: list[int] = []
                     for b in candidates:
+                        if b.id in course_book_ids:
+                            continue
                         has_l3 = db.scalar(select(Section).where(Section.book_id == b.id, Section.level == 3).limit(1))
                         if has_l3 is None:
                             has_l2 = db.scalar(select(Section).where(Section.book_id == b.id, Section.level == 2).limit(1))

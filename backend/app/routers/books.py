@@ -3,7 +3,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.orm import Session
@@ -99,7 +99,13 @@ def dashboard(db: Session = Depends(get_db)):
 
 
 @router.post("", response_model=BookOut)
-async def upload_book(file: UploadFile, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+async def upload_book(
+    file: UploadFile,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    max_level: int | None = Query(default=None, ge=2, le=3),
+    auto_confirm: bool = Query(default=False),
+):
     if not file.filename or not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".pptx")):
         raise HTTPException(status_code=400, detail="Only PDF and PPTX files are supported")
     content = await file.read()
@@ -145,6 +151,11 @@ async def upload_book(file: UploadFile, background_tasks: BackgroundTasks, db: S
         dest = settings.data.uploads_dir / f"{stem}.pdf"
         dest.write_bytes(content)
         book = Book(title=Path(file.filename).stem, filename=file.filename, path=str(dest), status="pending", content_type="book")
+    # Course defaults: L1+L2 only, auto-confirm (skip first-chapter picker)
+    if max_level in (2, 3):
+        book.ingestion_max_level = max_level
+    if auto_confirm:
+        book.content_start_confirmed = True
     db.add(book)
     db.commit()
     db.refresh(book)

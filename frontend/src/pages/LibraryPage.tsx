@@ -140,7 +140,7 @@ export default function LibraryPage() {
       const title = files[0].name.replace(/\.(pdf|pptx)$/i, '')
       const bookIds: number[] = []
       for (const f of Array.from(files)) {
-        const b = await api.uploadBook(f)
+        const b = await api.uploadBook(f, { maxLevel: 2, autoConfirm: true })
         bookIds.push(b.id)
       }
       const course = await api.createCourse(title, '', bookIds)

@@ -61,7 +61,7 @@ export default function CoursePage() {
     try {
       const ids: number[] = []
       for (const f of Array.from(files)) {
-        const b = await api.uploadBook(f)
+        const b = await api.uploadBook(f, { maxLevel: 2, autoConfirm: true })
         ids.push(b.id)
       }
       await api.addBooksToCourse(cid, ids)

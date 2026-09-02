@@ -41,10 +41,14 @@ export const api = {
   getDashboard: () => authFetch('/api/books/dashboard').then((r) => parse<Dashboard>(r)),
   searchLibrary: (q: string, k = 12) =>
     authFetch(`/api/search?q=${encodeURIComponent(q)}&k=${k}`).then((r) => parse<SearchHit[]>(r)),
-  uploadBook: (file: File) => {
+  uploadBook: (file: File, opts?: { maxLevel?: number; autoConfirm?: boolean }) => {
     const form = new FormData()
     form.append('file', file)
-    return authFetch('/api/books', { method: 'POST', body: form }).then((r) => parse<Book>(r))
+    const params = new URLSearchParams()
+    if (opts?.maxLevel !== undefined) params.set('max_level', String(opts.maxLevel))
+    if (opts?.autoConfirm) params.set('auto_confirm', 'true')
+    const qs = params.toString() ? `?${params.toString()}` : ''
+    return authFetch(`/api/books${qs}`, { method: 'POST', body: form }).then((r) => parse<Book>(r))
   },
   getBook: (id: number) => authFetch(`/api/books/${id}`).then((r) => parse<Book>(r)),
   deleteBook: (id: number) =>

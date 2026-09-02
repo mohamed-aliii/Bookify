@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -12,6 +12,14 @@ from ..models import Book, Chunk, Course, CourseBook, Flashcard, QuizAttempt, Re
 router = APIRouter(prefix="/courses", tags=["courses"])
 
 UPLOAD_DIR = settings.data.uploads_dir
+
+
+def _apply_course_defaults(book: Book) -> None:
+    """Apply course defaults: L1+L2 only, auto-confirm (no popup)."""
+    if getattr(book, "ingestion_max_level", 3) != 2:
+        book.ingestion_max_level = 2
+    if not book.content_start_confirmed:
+        book.content_start_confirmed = True
 
 
 def _course_out(course: Course, db: Session) -> dict:
@@ -53,7 +61,7 @@ def list_courses(db: Session = Depends(get_db)):
 
 
 @router.post("")
-def create_course(body: dict, db: Session = Depends(get_db)):
+def create_course(body: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     title = (body.get("title") or "").strip()
     if not title:
         raise HTTPException(400, "Title is required")
@@ -68,6 +76,7 @@ def create_course(body: dict, db: Session = Depends(get_db)):
         b = db.get(Book, bid)
         if not b:
             continue
+        _apply_course_defaults(b)
         cb = CourseBook(course_id=course.id, book_id=bid, ord=i)
         db.add(cb)
 
@@ -119,7 +128,7 @@ def delete_course(course_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/{course_id}/books")
-def add_books_to_course(course_id: int, body: dict, db: Session = Depends(get_db)):
+def add_books_to_course(course_id: int, body: dict, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     course = db.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Course not found")
@@ -135,6 +144,7 @@ def add_books_to_course(course_id: int, body: dict, db: Session = Depends(get_db
         )
         if existing:
             continue
+        _apply_course_defaults(b)
         max_ord += 1
         db.add(CourseBook(course_id=course_id, book_id=bid, ord=max_ord))
         added += 1
