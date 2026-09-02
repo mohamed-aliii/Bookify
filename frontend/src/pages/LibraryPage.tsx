@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import type { Book, Dashboard, SearchHit } from '../types'
+import type { Book, Course, Dashboard, SearchHit } from '../types'
 import AppShell from '../components/AppShell'
 import ContentStartPicker from '../components/ContentStartPicker'
 import { SkeletonCard } from '../components/ui/Skeleton'
@@ -40,6 +40,10 @@ export default function LibraryPage() {
   const [reindexingId, setReindexingId] = useState<number | null>(null)
   const [failedCovers, setFailedCovers] = useState<Set<number>>(() => new Set())
   const [firstChapterBookId, setFirstChapterBookId] = useState<number | null>(null)
+  const [courses, setCourses] = useState<Course[]>([])
+  const [addToCourseBookId, setAddToCourseBookId] = useState<number | null>(null)
+  const [multiFileRef, setMultiFileRef] = useState<'single' | 'course'>('single')
+  const multiFileInputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const navigate = useNavigate()
@@ -68,9 +72,10 @@ export default function LibraryPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [bks, dash] = await Promise.all([api.listBooks(), api.getDashboard()])
+      const [bks, dash, c] = await Promise.all([api.listBooks(), api.getDashboard(), api.listCourses()])
       setBooks(bks)
       setDashboard(dash)
+      setCourses(c)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -127,6 +132,32 @@ export default function LibraryPage() {
     finally { setReindexingId(null) }
   }
 
+  const onMultiFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files
+    if (!files || files.length === 0) return
+    setUploading(true); setError(null)
+    try {
+      const title = files[0].name.replace(/\.(pdf|pptx)$/i, '')
+      const bookIds: number[] = []
+      for (const f of Array.from(files)) {
+        const b = await api.uploadBook(f)
+        bookIds.push(b.id)
+      }
+      const course = await api.createCourse(title, '', bookIds)
+      await refresh()
+      nav(`/courses/${course.id}`)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+    finally { setUploading(false); e.target.value = '' }
+  }
+
+  const addBookToCourse = async (courseId: number) => {
+    if (!addToCourseBookId) return
+    try {
+      await api.addBooksToCourse(courseId, [addToCourseBookId])
+      setAddToCourseBookId(null)
+    } catch (e) { console.error(e) }
+  }
+
   const readyCount = books.filter((b) => b.status === 'ready').length
   const statsByBook = new Map((dashboard?.books ?? []).map((d) => [d.id, d]))
   const dueBooks = (dashboard?.books ?? []).filter((d) => d.status === 'ready' && d.cards_due > 0)
@@ -179,6 +210,25 @@ export default function LibraryPage() {
 
   const headerActions = (
     <div className="flex items-center gap-2">
+      <input
+        ref={multiFileInputRef}
+        type="file"
+        multiple
+        accept=".pdf,.pptx"
+        className="hidden"
+        onChange={onMultiFileUpload}
+      />
+      <button
+        onClick={() => { setMultiFileRef('course'); multiFileInputRef.current?.click() }}
+        disabled={uploading}
+        className="btn-primary btn-sm"
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+          <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
+          <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
+        </svg>
+        {uploading ? 'Uploading…' : 'Create Course'}
+      </button>
       <button onClick={() => fileRef.current?.click()} disabled={uploading} className="btn-primary btn-sm">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
           <path d="M12 5v14M5 12h14" strokeLinecap="round"/>
@@ -389,6 +439,33 @@ export default function LibraryPage() {
                               <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2" strokeLinecap="round" strokeLinejoin="round"/>
                             </svg>
                           </button>
+                          <div className="relative">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setAddToCourseBookId(addToCourseBookId === book.id ? null : book.id) }}
+                              disabled={busy || courses.length === 0}
+                              title="Add to course"
+                              className="pointer-events-auto btn-icon !p-1.5"
+                            >
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+                                <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
+                                <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            </button>
+                            {addToCourseBookId === book.id && courses.length > 0 && (
+                              <div className="absolute right-0 bottom-full mb-1 z-30 w-48 rounded-xl border border-white/[0.08] bg-surface-2 p-1 shadow-glass" onClick={e => e.stopPropagation()}>
+                                <p className="px-2 py-1 text-[10px] text-slate-500">Add to course</p>
+                                {courses.map(c => (
+                                  <button
+                                    key={c.id}
+                                    onClick={() => addBookToCourse(c.id)}
+                                    className="w-full truncate rounded-lg px-2 py-1.5 text-left text-xs text-slate-300 hover:bg-white/[0.06]"
+                                  >
+                                    {c.title}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
 

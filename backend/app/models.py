@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -421,4 +421,34 @@ class ConceptClusterMember(Base):
 
     cluster: Mapped[ConceptCluster] = relationship(back_populates="members")
     knowledge_point: Mapped[KnowledgePoint] = relationship()
+    book: Mapped[Book] = relationship()
+
+
+class Course(Base):
+    __tablename__ = "courses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(400))
+    description: Mapped[str] = mapped_column(Text, default="")
+    cover_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    books: Mapped[list["CourseBook"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan", order_by="CourseBook.ord"
+    )
+
+
+class CourseBook(Base):
+    __tablename__ = "course_books"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"))
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"))
+    ord: Mapped[int] = mapped_column(Integer, default=0)
+    added_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("course_id", "book_id", name="uq_course_book"),)
+
+    course: Mapped[Course] = relationship(back_populates="books")
     book: Mapped[Book] = relationship()

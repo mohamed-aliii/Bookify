@@ -330,6 +330,42 @@ export const api = {
     if (!res.ok) throw new Error(await res.text())
     return await res.json() as Promise<{ ok: boolean; message?: string; created?: number; rate_limited?: boolean; failed_section?: string | null; retry_after_ms?: number | null; total_sections?: number }>
   },
+
+  // --- Courses ---
+  listCourses: () => authFetch('/api/courses').then((r) => parse<import('./types').Course[]>(r)),
+  getCourse: (id: number) => authFetch(`/api/courses/${id}`).then((r) => parse<import('./types').Course>(r)),
+  createCourse: (title: string, description = '', bookIds: number[] = []) =>
+    authFetch('/api/courses', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, description, book_ids: bookIds }),
+    }).then((r) => parse<import('./types').Course>(r)),
+  updateCourse: (id: number, body: { title?: string; description?: string }) =>
+    authFetch(`/api/courses/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }).then((r) => parse<import('./types').Course>(r)),
+  deleteCourse: (id: number) =>
+    authFetch(`/api/courses/${id}`, { method: 'DELETE' }).then((r) => parse<{ ok: boolean }>(r)),
+  addBooksToCourse: (courseId: number, bookIds: number[]) =>
+    authFetch(`/api/courses/${courseId}/books`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ book_ids: bookIds }),
+    }).then((r) => parse<{ ok: boolean; added: number }>(r)),
+  removeBookFromCourse: (courseId: number, bookId: number) =>
+    authFetch(`/api/courses/${courseId}/books/${bookId}`, { method: 'DELETE' }).then((r) => parse<{ ok: boolean }>(r)),
+  reorderCourseBook: (courseId: number, bookId: number, direction: 'up' | 'down') =>
+    authFetch(`/api/courses/${courseId}/books/${bookId}/order`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ direction }),
+    }).then((r) => parse<{ ok: boolean }>(r)),
+  getCourseProgress: (courseId: number) =>
+    authFetch(`/api/courses/${courseId}/progress`).then((r) => parse<import('./types').CourseProgress>(r)),
+  getCourseDueCards: (courseId: number, limit = 30) =>
+    authFetch(`/api/courses/${courseId}/due-cards?limit=${limit}`).then((r) => parse<import('./types').CourseDueCard[]>(r)),
 }
 
 export interface ChatHandlers {
