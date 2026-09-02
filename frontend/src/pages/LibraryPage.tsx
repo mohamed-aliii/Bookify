@@ -42,8 +42,6 @@ export default function LibraryPage() {
   const [firstChapterBookId, setFirstChapterBookId] = useState<number | null>(null)
   const [courses, setCourses] = useState<Course[]>([])
   const [addToCourseBookId, setAddToCourseBookId] = useState<number | null>(null)
-  const [multiFileRef, setMultiFileRef] = useState<'single' | 'course'>('single')
-  const multiFileInputRef = useRef<HTMLInputElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const navigate = useNavigate()
@@ -132,24 +130,6 @@ export default function LibraryPage() {
     finally { setReindexingId(null) }
   }
 
-  const onMultiFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files
-    if (!files || files.length === 0) return
-    setUploading(true); setError(null)
-    try {
-      const title = files[0].name.replace(/\.(pdf|pptx)$/i, '')
-      const bookIds: number[] = []
-      for (const f of Array.from(files)) {
-        const b = await api.uploadBook(f, { maxLevel: 2, autoConfirm: true })
-        bookIds.push(b.id)
-      }
-      const course = await api.createCourse(title, '', bookIds)
-      await refresh()
-      nav(`/courses/${course.id}`)
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
-    finally { setUploading(false); e.target.value = '' }
-  }
-
   const addBookToCourse = async (courseId: number) => {
     if (!addToCourseBookId) return
     try {
@@ -208,38 +188,8 @@ export default function LibraryPage() {
     </div>
   )
 
-  const headerActions = (
-    <div className="flex items-center gap-2">
-      <input
-        ref={multiFileInputRef}
-        type="file"
-        multiple
-        accept=".pdf,.pptx"
-        className="hidden"
-        onChange={onMultiFileUpload}
-      />
-      <button
-        onClick={() => { setMultiFileRef('course'); multiFileInputRef.current?.click() }}
-        disabled={uploading}
-        className="btn-primary btn-sm"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-          <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
-          <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
-        </svg>
-        {uploading ? 'Uploading…' : 'Create Course'}
-      </button>
-      <button onClick={() => fileRef.current?.click()} disabled={uploading} className="btn-primary btn-sm">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-          <path d="M12 5v14M5 12h14" strokeLinecap="round"/>
-        </svg>
-        {uploading ? 'Uploading…' : 'Add Book'}
-      </button>
-    </div>
-  )
-
   return (
-    <AppShell header={<>{searchHeader}{headerActions}</>}>
+    <AppShell header={searchHeader}>
       <div className="page-container">
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>

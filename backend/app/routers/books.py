@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..ingest import ingest_book
-from ..models import Book, Chunk, CodeBlock, ConceptEdge, CrossBookLink, Flashcard, KnowledgePoint, Note, Notebook, QuizAttempt, QuizError, ReadingProgress, Section, SectionSummary, UserKnowledgePoint, VocabWord, utcnow_naive
+from ..models import Book, Chunk, CodeBlock, ConceptEdge, CourseBook, CrossBookLink, Flashcard, KnowledgePoint, Note, Notebook, QuizAttempt, QuizError, ReadingProgress, Section, SectionSummary, UserKnowledgePoint, VocabWord, utcnow_naive
 from ..schemas import BookOut, DashboardBook, DashboardOut, QuizAttemptOut, SectionOut
 from ..vectorstore import get_vector_store
 
@@ -166,7 +166,9 @@ async def upload_book(
 
 @router.get("", response_model=list[BookOut])
 def list_books(db: Session = Depends(get_db)):
-    return list(db.scalars(select(Book).order_by(Book.created_at.desc(), Book.id.desc())))
+    # Exclude books that belong to any course (course folder) per user request
+    course_book_ids = select(CourseBook.book_id)
+    return list(db.scalars(select(Book).where(Book.id.not_in(course_book_ids)).order_by(Book.created_at.desc(), Book.id.desc())))
 
 
 @router.get("/{book_id}", response_model=BookOut)
