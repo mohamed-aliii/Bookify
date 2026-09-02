@@ -5,11 +5,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from ..config import UPLOAD_DIR
+from ..config import settings
 from ..database import get_db
 from ..models import Book, Chunk, Course, CourseBook, Flashcard, QuizAttempt, ReadingProgress, Section
 
 router = APIRouter(prefix="/courses", tags=["courses"])
+
+UPLOAD_DIR = settings.data.uploads_dir
 
 
 def _course_out(course: Course, db: Session) -> dict:
