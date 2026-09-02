@@ -35,7 +35,7 @@ class IngestionConfig:
     chunk_overlap: int = 200
     top_k: int = 6
     min_heading_ratio: float = 1.15
-    max_toc_level: int = 2
+    max_toc_level: int = 3
     front_matter_blacklist: tuple[str, ...] = (
         "front matter", "title page", "half title", "copyright", "table of contents",
         "contents", "dedication", "epigraph", "disclaimer", "preface", "foreword",

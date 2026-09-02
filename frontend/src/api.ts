@@ -328,7 +328,7 @@ export const api = {
   extractCodeBlocks: async (bookId: number, force = false) => {
     const res = await authFetch(`/api/books/${bookId}/code-blocks/extract?force=${force}`, { method: 'POST' })
     if (!res.ok) throw new Error(await res.text())
-    return await res.json() as Promise<{ ok: boolean; message?: string; created?: number }>
+    return await res.json() as Promise<{ ok: boolean; message?: string; created?: number; rate_limited?: boolean; failed_section?: string | null; retry_after_ms?: number | null; total_sections?: number }>
   },
 }
 
@@ -484,18 +484,46 @@ export async function extractSectionConceptGraph(bookId: number, sectionId: numb
 }
 
 export async function getContentStart(bookId: number) {
+  if (!Number.isFinite(bookId)) throw new Error('Invalid book id')
   const res = await authFetch(`/api/books/${bookId}/content-start`)
-  if (!res.ok) throw new Error('Failed to fetch content start')
+  if (!res.ok) {
+    const text = await res.text()
+    const err: Error & { status?: number } = new Error(text || `${res.status} ${res.statusText}`)
+    err.status = res.status
+    throw err
+  }
   return await res.json() as Promise<import('./types').ContentStartInfo>
 }
 
-export async function setContentStart(bookId: number, page: number | null) {
+export async function setContentStart(bookId: number, page: number | null, max_level?: number | null) {
+  if (!Number.isFinite(bookId)) throw new Error('Invalid book id')
+  const body: Record<string, unknown> = { page }
+  if (max_level !== undefined && max_level !== null) body.max_level = max_level
   const res = await authFetch(`/api/books/${bookId}/content-start`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ page }),
+    body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(await res.text())
+  if (!res.ok) {
+    const text = await res.text()
+    const err: Error & { status?: number } = new Error(text || `${res.status} ${res.statusText}`)
+    err.status = res.status
+    throw err
+  }
+  return await res.json() as Promise<{ ok: boolean; reindexed?: boolean }>
+}
+
+export async function confirmContentStart(bookId: number) {
+  if (!Number.isFinite(bookId)) throw new Error('Invalid book id')
+  const res = await authFetch(`/api/books/${bookId}/content-start/confirm`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    const err: Error & { status?: number } = new Error(text || `${res.status} ${res.statusText}`)
+    err.status = res.status
+    throw err
+  }
   return await res.json() as Promise<{ ok: boolean }>
 }
 

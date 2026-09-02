@@ -51,11 +51,21 @@ export default function CodeLibraryPanel({
     setInfo(null)
     try {
       const res = await api.extractCodeBlocks(bookId, true)
-      if (res.message) setInfo(res.message)
+      if (res.rate_limited) {
+        const remaining = res.failed_section ? ` (failed at "${res.failed_section}")` : ''
+        const retry = res.retry_after_ms ? ` Retry after ${new Date(res.retry_after_ms).toLocaleTimeString()}` : ' Wait for daily reset or add credits.'
+        setError(`Rate limit reached (50/day free) – ${res.created ?? 0}/${res.total_sections ?? '?'} sections extracted${remaining}. ${retry}`)
+        setInfo(`Partial extraction: ${res.created ?? 0} snippet(s) created. Click Extract again after the limit resets.`)
+      } else if (res.message) setInfo(res.message)
       else setInfo(`Extraction complete: ${res.created ?? 0} code snippet(s) created.`)
       await loadBlocks()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      const msg = e instanceof Error ? e.message : String(e)
+      if (msg.includes('Rate limit') || msg.includes('429') || msg.toLowerCase().includes('rate_limit')) {
+        setError('Rate limit reached (50/day free) – extraction stopped. Please wait for reset or add credits and retry.')
+      } else {
+        setError(msg)
+      }
     } finally {
       setExtracting(false)
     }

@@ -1,5 +1,6 @@
 ﻿import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import PdfViewer from './PdfViewer'
+import SlideViewer from './SlideViewer'
 import SelectionToolbar from './SelectionToolbar'
 import TranslatePopup from './TranslatePopup'
 import SectionChatPanel, { type SectionChatHandle } from './SectionChatPanel'
@@ -12,6 +13,7 @@ interface Props {
   jumpToPage?: number | null
   onJumpComplete?: () => void
   onOpenNotebook?: (cellId: number, sectionId: number) => void
+  contentType?: 'book' | 'slides'
 }
 
 interface ReadState {
@@ -45,8 +47,10 @@ function saveReadState(bookId: number, state: ReadState) {
   }
 }
 
-export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete, onOpenNotebook }: Props) {
+export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete, onOpenNotebook, contentType = 'book' }: Props) {
+  const isSlides = contentType === 'slides'
   const firstChapterPage = useMemo(() => {
+    if (isSlides) return 1
     const l1Idxs: number[] = []
     for (let i = 0; i < sections.length; i++) { if (sections[i].level === 1) l1Idxs.push(i) }
     let startIdx = 0
@@ -56,7 +60,7 @@ export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete,
     }
     if (startIdx === 0 && l1Idxs.length > 1) startIdx = l1Idxs[1]
     return sections[startIdx]?.page_start ?? 1
-  }, [sections])
+  }, [sections, isSlides])
 
   const [selectedText, setSelectedText] = useState('')
   const [selectionPage, setSelectionPage] = useState<number | null>(null)
@@ -81,6 +85,16 @@ export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete,
   const currentSectionTitle = useMemo(() => {
     const sec = sections.find((s) => s.id === currentSectionId)
     return sec?.title ?? ''
+  }, [sections, currentSectionId])
+
+  const currentSectionInfo = useMemo(() => {
+    const sec = sections.find((s) => s.id === currentSectionId)
+    if (!sec) return null
+    const idx = sections.findIndex((s) => s.id === sec.id)
+    const isLast = idx === sections.length - 1
+    const pageCount = sec.page_end && sec.page_end > sec.page_start ? (isLast ? sec.page_end - sec.page_start + 1 : sec.page_end - sec.page_start) : 1
+    const displayEnd = sec.page_end && sec.page_end > sec.page_start ? (isLast ? sec.page_end : sec.page_end - 1) : sec.page_start
+    return { title: sec.title, range: `p. ${sec.page_start}–${displayEnd}`, count: pageCount }
   }, [sections, currentSectionId])
 
   useEffect(() => {
@@ -136,7 +150,7 @@ export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete,
             onClick={() => setViewMode('pdf')}
             className={`rounded-lg px-3 py-1 text-xs font-medium transition-colors ${viewMode === 'pdf' ? 'bg-white/[0.06] text-white' : 'text-slate-500 hover:text-slate-300'}`}
           >
-            PDF View
+            {isSlides ? 'Slide View' : 'PDF View'}
           </button>
           <button
             onClick={() => setViewMode('text')}
@@ -144,7 +158,11 @@ export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete,
           >
             Text View
           </button>
-          <span className="ml-auto text-2xs text-slate-600">Starts at chapter 1 (page {firstChapterPage})</span>
+          <span className="ml-auto text-2xs text-slate-600" title={currentSectionInfo ? `${currentSectionInfo.title} • ${currentSectionInfo.range}` : `Starts at p. ${firstChapterPage}`}>
+            {isSlides
+              ? (currentSectionInfo ? `${currentSectionInfo.title} • Slide ${currentSectionInfo.range?.replace('p. ', '')}` : `Slide ${firstChapterPage}`)
+              : (currentSectionInfo ? `${currentSectionInfo.title} • ${currentSectionInfo.count} pages • ${currentSectionInfo.range}` : `Starts at chapter 1 (page ${firstChapterPage})`)}
+          </span>
           <button
             onClick={() => setChatVisible((v) => !v)}
             className={`ml-2 rounded-lg px-3 py-1 text-xs font-medium transition-colors ${chatVisible ? 'bg-indigo-600/20 text-indigo-300' : 'text-slate-500 hover:text-slate-300'}`}
@@ -154,15 +172,27 @@ export default function ReadView({ bookId, sections, jumpToPage, onJumpComplete,
         </div>
 
         {viewMode === 'pdf' ? (
-          <PdfViewer
-            pdfUrl={pdfUrl}
-            initialPage={currentPage}
-            jumpToPage={jumpToPage}
-            onSelection={handleSelection}
-            onJumpComplete={onJumpComplete}
-            onPageChange={(page) => setCurrentPage(page)}
-            className="flex-1"
-          />
+          isSlides ? (
+            <SlideViewer
+              pdfUrl={pdfUrl}
+              initialPage={currentPage}
+              jumpToPage={jumpToPage}
+              onSelection={handleSelection}
+              onJumpComplete={onJumpComplete}
+              onPageChange={(page) => setCurrentPage(page)}
+              className="flex-1"
+            />
+          ) : (
+            <PdfViewer
+              pdfUrl={pdfUrl}
+              initialPage={currentPage}
+              jumpToPage={jumpToPage}
+              onSelection={handleSelection}
+              onJumpComplete={onJumpComplete}
+              onPageChange={(page) => setCurrentPage(page)}
+              className="flex-1"
+            />
+          )
         ) : (
           <TextView bookId={bookId} sections={sections} startPage={firstChapterPage} />
         )}

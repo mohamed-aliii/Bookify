@@ -15,6 +15,9 @@ class BookOut(BaseModel):
     error: str | None
     content_start_section_id: int | None = None
     content_start_page: int | None = None
+    content_start_confirmed: bool = False
+    ingestion_max_level: int = 3
+    content_type: str = "book"
 
 
 class SectionOut(BaseModel):

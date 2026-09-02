@@ -38,6 +38,19 @@ COPY backend/requirements.txt ./backend/requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r backend/requirements.txt
 
+# Pre-download the chroma_default ONNX embedding model so the first
+# ingestion doesn't have to fetch ~80 MB at runtime (which times out
+# under slow networks — see onnx_mini_lm_l6_v2.py _download).
+# The model is ~80 MB tar.gz from S3; we use wget with resume/retry
+# because httpx's 5s read timeout is too short for slow links.
+RUN mkdir -p /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2 && \
+    wget --tries=5 --timeout=60 --continue -O /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx.tar.gz \
+        https://chroma-onnx-models.s3.amazonaws.com/all-MiniLM-L6-v2/onnx.tar.gz && \
+    tar -xzf /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx.tar.gz -C /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2 && \
+    ls -lh /root/.cache/chroma/onnx_models/all-MiniLM-L6-v2/onnx/ && \
+    python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ef = ONNXMiniLM_L6_V2(); print('ONNX warm-up ok:', ef(['hello world', 'bookify test'])[0][:3])" || \
+    (echo "WARN: ONNX warm-up failed — model will be fetched at runtime" && true)
+
 # Backend source
 COPY backend/ ./backend/
 

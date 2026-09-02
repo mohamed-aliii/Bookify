@@ -16,6 +16,67 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 async def lifespan(app: FastAPI):
     ensure_dirs()
     init_db()
+    # Auto-upgrade existing books to L2+L3 (user requested) – reindex those that have no L3 yet
+    try:
+        import threading
+
+        from sqlalchemy import select
+
+        from .database import SessionLocal
+        from .models import Book, Section
+
+        def _auto_upgrade() -> None:
+            try:
+                from .ingest import ingest_book
+                from .routers.books import reindex_book
+                from fastapi import BackgroundTasks
+
+                with SessionLocal() as db:
+                    candidates = list(db.scalars(select(Book).where(Book.ingestion_max_level == 3, Book.status == "ready")))
+                    to_reindex: list[int] = []
+                    for b in candidates:
+                        has_l3 = db.scalar(select(Section).where(Section.book_id == b.id, Section.level == 3).limit(1))
+                        if has_l3 is None:
+                            has_l2 = db.scalar(select(Section).where(Section.book_id == b.id, Section.level == 2).limit(1))
+                            if has_l2 is not None:
+                                to_reindex.append(b.id)
+                    if not to_reindex:
+                        return
+                    logging.info("Auto-upgrading %d book(s) to L2+L3: %s", len(to_reindex), to_reindex)
+                    for bid in to_reindex:
+                        try:
+                            # Use a fresh DB session per book to avoid cross-contamination
+                            with SessionLocal() as rdb:
+                                bt = BackgroundTasks()
+                                # reindex_book will stash, delete, set pending and schedule ingest via bt
+                                # We call it directly; then run the background tasks synchronously
+                                try:
+                                    reindex_book(bid, bt, rdb)
+                                except Exception as e:
+                                    logging.warning("Auto-reindex failed for book %s: %s", bid, e)
+                                    continue
+                                # Run the scheduled ingest tasks sequentially (BackgroundTasks holds them)
+                                for task in getattr(bt, "tasks", []):
+                                    try:
+                                        # task is Starlette BackgroundTask with func/args/kwargs
+                                        func = getattr(task, "func", None)
+                                        args = getattr(task, "args", ())
+                                        kwargs = getattr(task, "kwargs", {})
+                                        if func:
+                                            func(*args, **kwargs)
+                                        else:
+                                            # Fallback: BackgroundTasks is just a list of callables in some Starlette versions
+                                            task()
+                                    except Exception as e:
+                                        logging.warning("Auto-ingest failed for book %s: %s", bid, e)
+                        except Exception as e:
+                            logging.warning("Auto-upgrade loop error for %s: %s", bid, e)
+            except Exception as e:
+                logging.warning("Auto-upgrade check failed: %s", e)
+
+        threading.Thread(target=_auto_upgrade, daemon=True).start()
+    except Exception as e:
+        logging.warning("Failed to start auto-upgrade thread: %s", e)
     yield
     kernel_manager.shutdown()
 

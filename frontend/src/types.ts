@@ -9,12 +9,19 @@ export interface Book {
   error: string | null
   content_start_section_id: number | null
   content_start_page: number | null
+  content_start_confirmed: boolean
+  ingestion_max_level: number
+  content_type: 'book' | 'slides'
 }
 
 export interface ContentStartInfo {
   content_start_section_id: number | null
   content_start_page: number | null
+  content_start_confirmed: boolean
+  needs_selection: boolean
   first_section_title: string | null
+  ingestion_max_level: number
+  available_max_level: number
   sections: Section[]
 }
 
