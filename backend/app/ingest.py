@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from .chunker import ChunkDraft, SectionDraft, make_chunks
 from .config import settings
@@ -259,6 +259,13 @@ def ingest_book(book_id: int) -> None:
             cover = extract_cover(cover_src) if cover_src else None
         if cover:
             book.cover_path = cover
+
+        # Clean up any existing sections and chunks for this book before writing new ones
+        book.content_start_section_id = None
+        db.flush()
+        db.execute(delete(Chunk).where(Chunk.book_id == book.id))
+        db.execute(delete(Section).where(Section.book_id == book.id))
+        db.flush()
 
         section_rows: list[Section] = []
         stack: list[Section] = []

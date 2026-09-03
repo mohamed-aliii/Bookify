@@ -51,10 +51,9 @@ def extract_blocks_and_body_size(
 ) -> tuple[list[PageBlock], float]:
     raw_blocks: list[tuple[int, str, set[str], list[float]]] = []
     font_weights: dict[float, float] = {}
-    flags = fitz.TEXTFLAGS_TEXT
 
     for pno, page in enumerate(doc, start=1):
-        d = page.get_text("dict", flags=flags)
+        d = page.get_text("dict")
         for block in d.get("blocks", []):
             if block.get("type") != 0:
                 continue

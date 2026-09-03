@@ -154,13 +154,33 @@ def build_sections(parsed: ParsedBook, max_level: int | None = None) -> list[Sec
             return drafts
 
     drafts: list[SectionDraft] = []
+    candidates: list[tuple[int, str]] = []
     for block in parsed.blocks:
         if block.kind != "heading":
             continue
-        title = block.text.split("\n")[0].strip()
-        if drafts and block.page == drafts[-1].page_start and drafts[-1].title == title:
+        title = " ".join(block.text.splitlines()).strip()
+        title = re.sub(r"\s+", " ", title)
+        if len(title) <= 2 or re.match(r"^\d+\s*/\s*\d+$", title):
             continue
-        drafts.append(SectionDraft(title=title, level=1, page_start=block.page))
+        candidates.append((block.page, title))
+
+    title_counts = Counter(t.lower() for _, t in candidates)
+    page_count = max(parsed.num_pages, 1)
+    recurring = {t for t, n in title_counts.items() if n > 3 and (n > page_count * 0.10 or n > 6)}
+
+    for pno, title in candidates:
+        if title.lower() in recurring:
+            continue
+        if drafts and (
+            title.lower() == drafts[-1].title.lower()
+            or title.lower().startswith(drafts[-1].title.lower() + " ")
+            or (drafts[-1].title.lower() in title.lower() and len(drafts[-1].title) > 6)
+        ):
+            continue
+        if drafts and pno == drafts[-1].page_start:
+            continue
+        drafts.append(SectionDraft(title=title, level=1, page_start=pno))
+
     if not drafts:
         drafts = [SectionDraft(title=parsed.title, level=1, page_start=1)]
     return drafts
