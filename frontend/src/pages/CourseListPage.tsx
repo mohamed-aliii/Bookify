@@ -84,13 +84,6 @@ export default function CourseListPage() {
     }
   }
 
-  const coverUrl = (c: Course) => {
-    if (!c.cover_path) return null
-    const bid = c.books?.[0]?.book_id
-    if (bid) return api.getBookCoverUrl(bid)
-    return null
-  }
-
   return (
     <AppShell header={<span className="text-sm font-semibold text-white">Courses</span>}>
       <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
@@ -188,20 +181,13 @@ export default function CourseListPage() {
                 className="group cursor-pointer rounded-2xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/5"
               >
                 <div className="mb-3 flex items-start gap-3">
-                  <div className="h-16 w-12 flex-shrink-0 overflow-hidden rounded-lg bg-gradient-to-br from-indigo-500/20 to-fuchsia-500/20">
-                    {coverUrl(c) ? (
-                      <img src={coverUrl(c)!} alt="" className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-lg text-indigo-400/60">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-6 w-6">
-                          <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
-                          <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
-                        </svg>
-                      </div>
-                    )}
+                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20 transition-colors group-hover:bg-indigo-500/20 group-hover:text-indigo-300">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" strokeLinecap="round" strokeLinejoin="round"/>
+                    </svg>
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h3 className="truncate text-sm font-semibold text-white">{c.title}</h3>
+                    <h3 className="truncate text-sm font-semibold text-white transition-colors group-hover:text-indigo-200">{c.title}</h3>
                     {c.description && (
                       <p className="mt-0.5 truncate text-xs text-slate-500">{c.description}</p>
                     )}
