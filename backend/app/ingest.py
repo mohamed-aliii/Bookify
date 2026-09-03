@@ -196,7 +196,7 @@ def ingest_book(book_id: int) -> None:
                         max_level = int(max_level)
                     except Exception:
                         max_level = settings.ingestion.max_toc_level
-                    max_level = max(2, min(3, max_level))
+                    max_level = max(1, min(3, max_level))
                     sections, chunk_drafts, content_start_index = make_chunks(parsed, book.content_start_page, max_level=max_level)
                     if is_hashlike_title(book.title) or not (book.title or "").strip():
                         book.title = parsed.title
@@ -214,7 +214,7 @@ def ingest_book(book_id: int) -> None:
                     max_level = int(max_level)
                 except Exception:
                     max_level = settings.ingestion.max_toc_level
-                max_level = max(2, min(3, max_level))
+                max_level = max(1, min(3, max_level))
                 sections, chunk_drafts, content_start_index = make_chunks(parsed, book.content_start_page, max_level=max_level)
                 if is_hashlike_title(book.title) or not (book.title or "").strip():
                     book.title = parsed.title
@@ -226,13 +226,15 @@ def ingest_book(book_id: int) -> None:
                 fallback_title=Path(book.filename or "").stem,
             )
             max_level = getattr(book, "ingestion_max_level", None) or settings.ingestion.max_toc_level
-            # Clamp to 2..3 (L3 = subsections)
             try:
                 max_level = int(max_level)
             except Exception:
                 max_level = settings.ingestion.max_toc_level
-            max_level = max(2, min(3, max_level))
+            max_level = max(1, min(3, max_level))
             sections, chunk_drafts, content_start_index = make_chunks(parsed, book.content_start_page, max_level=max_level)
+            if is_hashlike_title(book.title) or not (book.title or "").strip():
+                book.title = parsed.title
+            book.num_pages = parsed.num_pages
 
         # For slides, skip front-matter handling – every slide is content
         if is_slides:

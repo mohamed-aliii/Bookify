@@ -12,6 +12,8 @@ export interface Book {
   content_start_confirmed: boolean
   ingestion_max_level: number
   content_type: 'book' | 'slides'
+  course_id?: number | null
+  course_title?: string | null
 }
 
 export interface ContentStartInfo {

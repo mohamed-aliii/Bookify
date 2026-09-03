@@ -272,10 +272,17 @@ export default function BookPage() {
       {/* Sidebar */}
       <aside style={{ width: sidebarWidth }} className={`relative fixed inset-y-0 left-0 z-50 flex flex-col border-r border-white/[0.06] bg-surface-1 transition-transform duration-300 lg:static lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex h-14 items-center gap-2 border-b border-white/[0.06] px-4">
-          <Link to="/" className="flex items-center gap-2 text-sm text-slate-400 transition hover:text-slate-200">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Library
-          </Link>
+          {book.course_id ? (
+            <Link to={`/courses/${book.course_id}`} className="flex items-center gap-2 text-sm text-slate-400 transition hover:text-slate-200" title={`Back to ${book.course_title || 'Course'}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <span className="truncate max-w-[140px]">{book.course_title || 'Course'}</span>
+            </Link>
+          ) : (
+            <Link to="/" className="flex items-center gap-2 text-sm text-slate-400 transition hover:text-slate-200">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Library
+            </Link>
+          )}
         </div>
         <div className="px-3 pt-3">
           <button onClick={() => void newChat()} disabled={streaming} className="btn-secondary w-full btn-sm">

@@ -1,5 +1,7 @@
 import { NavLink, useLocation } from 'react-router-dom'
 import { useState, useEffect, type ReactNode } from 'react'
+import { api } from '../api'
+import type { Course } from '../types'
 
 const NAV_ITEMS = [
   { to: '/', label: 'Library', icon: (
@@ -7,7 +9,7 @@ const NAV_ITEMS = [
       <path d="M4 19.5v-15A2.5 2.5 0 016.5 2H20v20H6.5a2.5 2.5 0 010-5H20" strokeLinecap="round" strokeLinejoin="round"/>
     </svg>
   )},
-  { to: '/courses', label: 'Series', icon: (
+  { to: '/courses', label: 'Courses', icon: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-[18px] w-[18px]">
       <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
       <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
@@ -33,9 +35,14 @@ interface AppShellProps {
 
 export default function AppShell({ children, header }: AppShellProps) {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [courses, setCourses] = useState<Course[]>([])
   const location = useLocation()
 
   useEffect(() => { setSidebarOpen(false) }, [location.pathname])
+
+  useEffect(() => {
+    api.listCourses().then(setCourses).catch(() => {})
+  }, [location.pathname])
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -61,21 +68,45 @@ export default function AppShell({ children, header }: AppShellProps) {
 
         <nav className="flex-1 space-y-1 px-3 py-4">
           {NAV_ITEMS.map(item => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              className={({ isActive }) =>
-                `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
-                  isActive
-                    ? 'bg-indigo-500/10 text-indigo-400 shadow-inner-glow'
-                    : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
-                }`
-              }
-            >
-              {item.icon}
-              {item.label}
-            </NavLink>
+            <div key={item.to}>
+              <NavLink
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  `flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium transition-all duration-150 ${
+                    isActive
+                      ? 'bg-indigo-500/10 text-indigo-400 shadow-inner-glow'
+                      : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+                  }`
+                }
+              >
+                {item.icon}
+                {item.label}
+              </NavLink>
+              {item.to === '/courses' && courses.length > 0 && (
+                <div className="ml-4 pl-3 border-l border-white/[0.08] my-1 space-y-0.5">
+                  {courses.map(c => (
+                    <NavLink
+                      key={c.id}
+                      to={`/courses/${c.id}`}
+                      className={({ isActive }) =>
+                        `flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs transition-colors duration-150 ${
+                          isActive
+                            ? 'bg-indigo-500/15 text-indigo-300 font-medium'
+                            : 'text-slate-400 hover:bg-white/[0.04] hover:text-slate-200'
+                        }`
+                      }
+                      title={c.title}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-slate-500">
+                        <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" strokeLinecap="round" strokeLinejoin="round"/>
+                      </svg>
+                      <span className="truncate">{c.title}</span>
+                    </NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
           ))}
         </nav>
 

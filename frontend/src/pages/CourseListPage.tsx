@@ -43,7 +43,7 @@ export default function CourseListPage() {
     setMultiFiles(Array.from(files))
     setShowCreate(true)
     if (!newTitle.trim()) {
-      setNewTitle(files[0]?.name?.replace(/\.(pdf|pptx)$/i, '') || 'New Series')
+      setNewTitle(files[0]?.name?.replace(/\.(pdf|pptx)$/i, '') || 'New Course')
     }
     e.target.value = ''
   }
@@ -53,13 +53,12 @@ export default function CourseListPage() {
     setUploading(true)
     setUploadProgress(`Uploading 0/${multiFiles.length} files...`)
     try {
-      const bookIds: number[] = []
+      // Create course first so uploads can be linked atomically (never appear in Library)
+      const course = await api.createCourse(newTitle.trim(), newDesc.trim(), [])
       for (let i = 0; i < multiFiles.length; i++) {
         setUploadProgress(`Uploading ${i + 1}/${multiFiles.length} files...`)
-        const book = await api.uploadBook(multiFiles[i], { maxLevel: 2, autoConfirm: true })
-        bookIds.push(book.id)
+        await api.uploadBook(multiFiles[i], { maxLevel: 1, autoConfirm: true, courseId: course.id })
       }
-      const course = await api.createCourse(newTitle.trim(), newDesc.trim(), bookIds)
       setMultiFiles([])
       setNewTitle('')
       setNewDesc('')
@@ -76,7 +75,7 @@ export default function CourseListPage() {
 
   const handleDelete = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation()
-    if (!confirm('Delete this series? Books will not be deleted.')) return
+    if (!confirm('Delete this course? All books in this course will also be removed.')) return
     try {
       await api.deleteCourse(id)
       await load()
@@ -93,12 +92,12 @@ export default function CourseListPage() {
   }
 
   return (
-    <AppShell header={<span className="text-sm font-semibold text-white">Series</span>}>
+    <AppShell header={<span className="text-sm font-semibold text-white">Courses</span>}>
       <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-semibold text-white">Your Series</h1>
-            <p className="mt-1 text-xs text-slate-500">Organize books and slides into series</p>
+            <h1 className="text-lg font-semibold text-white">Your Courses</h1>
+            <p className="mt-1 text-xs text-slate-500">Organize books and slides into courses</p>
           </div>
           <div className="flex gap-2">
             <input
@@ -120,7 +119,7 @@ export default function CourseListPage() {
               onClick={() => setShowCreate(true)}
               className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
             >
-              + New Series
+              + New Course
             </button>
           </div>
         </div>
@@ -177,8 +176,8 @@ export default function CourseListPage() {
               <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <p className="mb-2 text-sm text-slate-400">No series yet</p>
-            <p className="text-xs text-slate-600">Create a series to organize your books and slides</p>
+            <p className="mb-2 text-sm text-slate-400">No courses yet</p>
+            <p className="text-xs text-slate-600">Create a course to organize your books and slides</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

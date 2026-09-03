@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..ingest import ingest_book
-from ..models import Book, Chunk, CodeBlock, ConceptEdge, CourseBook, CrossBookLink, Flashcard, KnowledgePoint, Note, Notebook, QuizAttempt, QuizError, ReadingProgress, Section, SectionSummary, UserKnowledgePoint, VocabWord, utcnow_naive
+from ..models import Book, ChatSession, Chunk, CodeBlock, ConceptClusterMember, ConceptEdge, CourseBook, CrossBookLink, Flashcard, KnowledgePoint, Note, Notebook, QuizAttempt, QuizError, ReadingProgress, Section, SectionSummary, StudySession, UserKnowledgePoint, VocabWord, utcnow_naive
 from ..schemas import BookOut, DashboardBook, DashboardOut, QuizAttemptOut, SectionOut
 from ..vectorstore import get_vector_store
 
@@ -46,23 +46,37 @@ def dashboard(db: Session = Depends(get_db)):
     """Library-wide study overview: due cards, mastery and notes per book."""
     now = utcnow_naive()
 
+    course_book_ids = select(CourseBook.book_id).where(CourseBook.book_id.is_not(None))
+    lib_book_ids = select(Book.id).where(Book.id.not_in(course_book_ids))
+
     card_rows = db.execute(
         select(
             Flashcard.book_id,
             func.count(),
             func.sum(Flashcard.due_at <= now),
             func.sum(Flashcard.interval_days >= MASTERED_INTERVAL_DAYS),
-        ).group_by(Flashcard.book_id)
+        )
+        .where(Flashcard.book_id.in_(lib_book_ids))
+        .group_by(Flashcard.book_id)
     ).all()
-    note_rows = db.execute(select(Note.book_id, func.count()).group_by(Note.book_id)).all()
-    section_rows = db.execute(select(Section.book_id, func.count()).group_by(Section.book_id)).all()
+    note_rows = db.execute(
+        select(Note.book_id, func.count())
+        .where(Note.book_id.in_(lib_book_ids))
+        .group_by(Note.book_id)
+    ).all()
+    section_rows = db.execute(
+        select(Section.book_id, func.count())
+        .where(Section.book_id.in_(lib_book_ids))
+        .group_by(Section.book_id)
+    ).all()
     read_rows = db.execute(
         select(Section.book_id, func.count())
         .join(ReadingProgress, ReadingProgress.section_id == Section.id)
+        .where(Section.book_id.in_(lib_book_ids))
         .group_by(Section.book_id)
     ).all()
     attempts_by_book: dict[int, QuizAttempt] = {}
-    for attempt in db.scalars(select(QuizAttempt).order_by(QuizAttempt.id.desc())):
+    for attempt in db.scalars(select(QuizAttempt).where(QuizAttempt.book_id.in_(lib_book_ids)).order_by(QuizAttempt.id.desc())):
         attempts_by_book.setdefault(attempt.book_id, attempt)
 
     cards_by_book = {bid: (int(total), int(due or 0), int(mastered or 0)) for bid, total, due, mastered in card_rows}
@@ -73,8 +87,7 @@ def dashboard(db: Session = Depends(get_db)):
     books = []
     total_due = total_cards = total_mastered = 0
     # Exclude course (folder) books so they only appear under Courses
-    course_book_ids = select(CourseBook.book_id)
-    book_q = select(Book).where(Book.id.not_in(course_book_ids)).order_by(Book.created_at.desc(), Book.id.desc())
+    book_q = select(Book).where(Book.id.in_(lib_book_ids)).order_by(Book.created_at.desc(), Book.id.desc())
     for book in db.scalars(book_q):
         c_total, c_due, c_mastered = cards_by_book.get(book.id, (0, 0, 0))
         attempt = attempts_by_book.get(book.id)
@@ -106,9 +119,18 @@ async def upload_book(
     file: UploadFile,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
-    max_level: int | None = Query(default=None, ge=2, le=3),
+    max_level: int | None = Query(default=None, ge=1, le=3),
     auto_confirm: bool = Query(default=False),
+    course_id: int | None = Query(default=None),
 ):
+    # If uploading directly to a series, validate series exists before creating book
+    course = None
+    if course_id is not None:
+        from ..models import Course
+
+        course = db.get(Course, course_id)
+        if not course:
+            raise HTTPException(status_code=404, detail="Series not found")
     if not file.filename or not (file.filename.lower().endswith(".pdf") or file.filename.lower().endswith(".pptx")):
         raise HTTPException(status_code=400, detail="Only PDF and PPTX files are supported")
     content = await file.read()
@@ -142,24 +164,52 @@ async def upload_book(
             pdf_ready = False
 
         # Book.path points to PDF for viewer if available, else to PPTX
-        viewer_path = str(dest_pdf) if pdf_ready else str(dest_pptx)
+        num_pages = 0
+        if pdf_ready:
+            try:
+                import fitz
+                with fitz.open(dest_pdf) as doc:
+                    num_pages = doc.page_count
+            except Exception:
+                pass
         book = Book(
             title=Path(file.filename).stem,
             filename=file.filename,
             path=viewer_path,
+            num_pages=num_pages,
             status="pending",
             content_type="slides",
         )
     else:
         dest = settings.data.uploads_dir / f"{stem}.pdf"
         dest.write_bytes(content)
-        book = Book(title=Path(file.filename).stem, filename=file.filename, path=str(dest), status="pending", content_type="book")
-    # Course defaults: L1+L2 only, auto-confirm (skip first-chapter picker)
-    if max_level in (2, 3):
+        num_pages = 0
+        try:
+            import fitz
+            with fitz.open(dest) as doc:
+                num_pages = doc.page_count
+        except Exception:
+            pass
+        book = Book(title=Path(file.filename).stem, filename=file.filename, path=str(dest), num_pages=num_pages, status="pending", content_type="book")
+    # Ingestion level defaults: auto-confirm (skip first-chapter picker) for courses
+    if max_level in (1, 2, 3):
         book.ingestion_max_level = max_level
     if auto_confirm:
         book.content_start_confirmed = True
+    # Course uploads default to L1 only + auto-confirm
+    if course_id is not None:
+        book.ingestion_max_level = max_level if max_level in (1, 2, 3) else 1
+        book.content_start_confirmed = True
     db.add(book)
+    db.flush()
+
+    # Atomically link to series in same transaction so it never appears in Library
+    if course_id is not None and course is not None:
+        max_ord = db.scalar(select(func.max(CourseBook.ord)).where(CourseBook.course_id == course_id))
+        max_ord = -1 if max_ord is None else max_ord
+        db.add(CourseBook(course_id=course_id, book_id=book.id, ord=max_ord + 1))
+        if not course.cover_path and book.cover_path:
+            course.cover_path = book.cover_path
     db.commit()
     db.refresh(book)
 
@@ -170,7 +220,7 @@ async def upload_book(
 @router.get("", response_model=list[BookOut])
 def list_books(db: Session = Depends(get_db)):
     # Exclude books that belong to any course (course folder) per user request
-    course_book_ids = select(CourseBook.book_id)
+    course_book_ids = select(CourseBook.book_id).where(CourseBook.book_id.is_not(None))
     return list(db.scalars(select(Book).where(Book.id.not_in(course_book_ids)).order_by(Book.created_at.desc(), Book.id.desc())))
 
 
@@ -179,7 +229,15 @@ def get_book(book_id: int, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
-    return book
+    out = BookOut.model_validate(book)
+    cb = db.scalar(select(CourseBook).where(CourseBook.book_id == book_id))
+    if cb:
+        from ..models import Course
+        out.course_id = cb.course_id
+        course = db.get(Course, cb.course_id)
+        if course:
+            out.course_title = course.title
+    return out
 
 
 @router.get("/{book_id}/sections", response_model=list[SectionOut])
@@ -287,41 +345,82 @@ def reindex_book(book_id: int, background_tasks: BackgroundTasks, db: Session = 
 
 
 @router.delete("/{book_id}")
-def delete_book(book_id: int, db: Session = Depends(get_db)):
+def delete_book(book_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     book = db.get(Book, book_id)
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
+    # Keep paths before DB delete
+    path = Path(book.path) if book.path else None
+    sibling_pptx = path.with_suffix(".pptx") if path and path.suffix.lower() == ".pdf" else None
+    sibling_pdf = path.with_suffix(".pdf") if path and path.suffix.lower() == ".pptx" else None
+    cover_p = Path(book.cover_path) if book.cover_path else None
+    def _do_background_cleanup(bid: int, fpath: Path | None, s_pptx: Path | None, s_pdf: Path | None, cpath: Path | None):
+        try:
+            get_vector_store().delete_book(bid)
+        except Exception:
+            logger.warning("Vector cleanup failed for book %d", bid)
+        try:
+            get_vector_store().delete_book_code(bid)
+        except Exception:
+            logger.warning("Code vector cleanup failed for book %d", bid)
+
+        # File cleanup (best-effort)
+        for p in [fpath, s_pptx, s_pdf, cpath]:
+            if p and p.exists():
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    logger.warning("Could not delete file %s", p)
+
+    # Fast explicit deletes (all FKs) then book - proven fast for large books (e.g. 1119 chunks)
     with _with_fks_off(db):
-        get_vector_store().delete_book(book_id)
-        get_vector_store().delete_book_code(book_id)
-        db.execute(delete(Flashcard).where(Flashcard.book_id == book_id))
-        db.execute(delete(QuizAttempt).where(QuizAttempt.book_id == book_id))
-        db.execute(delete(SectionSummary).where(SectionSummary.book_id == book_id))
-        db.execute(delete(Note).where(Note.book_id == book_id))
-        db.execute(delete(Notebook).where(Notebook.book_id == book_id))
-        db.execute(delete(CodeBlock).where(CodeBlock.book_id == book_id))
-        kp_ids = select(KnowledgePoint.id).where(KnowledgePoint.book_id == book_id)
-        db.execute(delete(UserKnowledgePoint).where(UserKnowledgePoint.knowledge_point_id.in_(kp_ids)))
-        db.execute(delete(ConceptEdge).where(ConceptEdge.source_point_id.in_(kp_ids)))
-        db.execute(delete(CrossBookLink).where(or_(CrossBookLink.source_kp_id.in_(kp_ids), CrossBookLink.target_kp_id.in_(kp_ids))))
-        db.execute(delete(KnowledgePoint).where(KnowledgePoint.book_id == book_id))
-        path = Path(book.path)
-        # For slides, path may be PDF; also try to remove sibling PPTX + cover
-        sibling_pptx = path.with_suffix(".pptx") if path.suffix.lower() == ".pdf" else None
-        sibling_pdf = path.with_suffix(".pdf") if path.suffix.lower() == ".pptx" else None
-        cover_p = Path(book.cover_path) if book.cover_path else None
-        db.delete(book)
+        for stmt in [
+            delete(CourseBook).where(CourseBook.book_id == book_id),
+            delete(VocabWord).where(VocabWord.book_id == book_id),
+            delete(QuizError).where(QuizError.book_id == book_id),
+            delete(Flashcard).where(Flashcard.book_id == book_id),
+            delete(QuizAttempt).where(QuizAttempt.book_id == book_id),
+            delete(SectionSummary).where(SectionSummary.book_id == book_id),
+            delete(Note).where(Note.book_id == book_id),
+            delete(Notebook).where(Notebook.book_id == book_id),
+            delete(CodeBlock).where(CodeBlock.book_id == book_id),
+        ]:
+            try:
+                db.execute(stmt)
+            except Exception as e:
+                logger.warning("Cleanup failed for book %d: %s", book_id, e)
+        try:
+            kp_ids = select(KnowledgePoint.id).where(KnowledgePoint.book_id == book_id)
+            db.execute(delete(UserKnowledgePoint).where(UserKnowledgePoint.knowledge_point_id.in_(kp_ids)))
+            db.execute(delete(ConceptEdge).where(ConceptEdge.source_point_id.in_(kp_ids)))
+            db.execute(delete(ConceptEdge).where(ConceptEdge.target_point_id.in_(kp_ids)))
+            db.execute(delete(CrossBookLink).where(or_(CrossBookLink.source_kp_id.in_(kp_ids), CrossBookLink.target_kp_id.in_(kp_ids))))
+            db.execute(delete(KnowledgePoint).where(KnowledgePoint.book_id == book_id))
+        except Exception as e:
+            logger.warning("Concept cleanup failed for book %d: %s", book_id, e)
+        for stmt in [
+            delete(ConceptClusterMember).where(ConceptClusterMember.book_id == book_id) if hasattr(ConceptClusterMember, "book_id") else None,
+            delete(ReadingProgress).where(ReadingProgress.section_id.in_(select(Section.id).where(Section.book_id == book_id))),
+            delete(StudySession).where(StudySession.book_id == book_id) if hasattr(StudySession, "book_id") else None,
+            delete(ChatSession).where(ChatSession.book_id == book_id) if hasattr(ChatSession, "book_id") else None,
+        ]:
+            if stmt is None:
+                continue
+            try:
+                db.execute(stmt)
+            except Exception as e:
+                logger.warning("Cleanup failed for book %d: %s", book_id, e)
+        for stmt in [
+            delete(Chunk).where(Chunk.book_id == book_id),
+            delete(Section).where(Section.book_id == book_id),
+        ]:
+            try:
+                db.execute(stmt)
+            except Exception as e:
+                logger.warning("Cleanup failed for book %d: %s", book_id, e)
+        db.execute(delete(Book).where(Book.id == book_id))
         db.commit()
-    try:
-        path.unlink(missing_ok=True)
-        if sibling_pptx and sibling_pptx.exists():
-            sibling_pptx.unlink(missing_ok=True)
-        if sibling_pdf and sibling_pdf.exists():
-            sibling_pdf.unlink(missing_ok=True)
-        if cover_p and cover_p.exists():
-            cover_p.unlink(missing_ok=True)
-    except OSError:
-        logger.warning("Could not delete file %s", path)
+    background_tasks.add_task(_do_background_cleanup, book_id, path, sibling_pptx, sibling_pdf, cover_p)
     return {"ok": True}
 
 
@@ -393,8 +492,8 @@ def set_content_start(book_id: int, payload: dict, background_tasks: BackgroundT
     requested_max = payload.get("max_level")
     max_level_changed = False
     if requested_max is not None:
-        if not isinstance(requested_max, int) or requested_max not in (2, 3):
-            raise HTTPException(status_code=400, detail="max_level must be 2 or 3")
+        if not isinstance(requested_max, int) or requested_max not in (1, 2, 3):
+            raise HTTPException(status_code=400, detail="max_level must be 1, 2 or 3")
         current_max = getattr(book, "ingestion_max_level", 2) or 2
         if requested_max != current_max:
             book.ingestion_max_level = requested_max

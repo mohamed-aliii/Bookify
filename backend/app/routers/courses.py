@@ -15,9 +15,9 @@ UPLOAD_DIR = settings.data.uploads_dir
 
 
 def _apply_course_defaults(book: Book) -> None:
-    """Apply course defaults: L1+L2 only, auto-confirm (no popup)."""
-    if getattr(book, "ingestion_max_level", 3) != 2:
-        book.ingestion_max_level = 2
+    """Apply course defaults: L1 only, auto-confirm (no popup)."""
+    if getattr(book, "ingestion_max_level", 3) != 1:
+        book.ingestion_max_level = 1
     if not book.content_start_confirmed:
         book.content_start_confirmed = True
 
@@ -118,12 +118,24 @@ def update_course(course_id: int, body: dict, db: Session = Depends(get_db)):
 
 
 @router.delete("/{course_id}")
-def delete_course(course_id: int, db: Session = Depends(get_db)):
+def delete_course(course_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     course = db.get(Course, course_id)
     if not course:
         raise HTTPException(404, "Course not found")
+    cbs = list(db.scalars(select(CourseBook).where(CourseBook.course_id == course_id)))
+    book_ids = [cb.book_id for cb in cbs]
     db.delete(course)
     db.commit()
+
+    # Clean up unlinked books so deleting a course doesn't dump all books into the library
+    from .books import delete_book as do_delete_book
+    for bid in book_ids:
+        remaining = db.scalar(select(func.count(CourseBook.id)).where(CourseBook.book_id == bid))
+        if remaining == 0 and db.get(Book, bid):
+            try:
+                do_delete_book(book_id=bid, background_tasks=background_tasks, db=db)
+            except Exception as e:
+                logger.warning("Failed to delete book %d after course deletion: %s", bid, e)
     return {"ok": True}
 
 
@@ -164,7 +176,7 @@ def add_books_to_course(course_id: int, body: dict, background_tasks: Background
 
 
 @router.delete("/{course_id}/books/{book_id}")
-def remove_book_from_course(course_id: int, book_id: int, db: Session = Depends(get_db)):
+def remove_book_from_course(course_id: int, book_id: int, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     cb = db.scalar(
         select(CourseBook).where(CourseBook.course_id == course_id, CourseBook.book_id == book_id)
     )
@@ -172,6 +184,15 @@ def remove_book_from_course(course_id: int, book_id: int, db: Session = Depends(
         raise HTTPException(404, "Book not in course")
     db.delete(cb)
     db.commit()
+
+    # If this book is not in any other course, delete it completely so it doesn't spill into the library
+    other_courses = db.scalar(select(func.count(CourseBook.id)).where(CourseBook.book_id == book_id))
+    if other_courses == 0 and db.get(Book, book_id):
+        from .books import delete_book as do_delete_book
+        try:
+            do_delete_book(book_id=book_id, background_tasks=background_tasks, db=db)
+        except Exception as e:
+            logger.warning("Failed to auto-delete unlinked course book %d: %s", book_id, e)
 
     course = db.get(Course, course_id)
     if course and course.cover_path:

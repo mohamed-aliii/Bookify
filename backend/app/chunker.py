@@ -144,7 +144,7 @@ def build_sections(parsed: ParsedBook, max_level: int | None = None) -> list[Sec
         if drafts:
             if drafts[0].page_start > 1:
                 drafts.insert(0, SectionDraft(title="Front matter", level=drafts[0].level, page_start=1))
-            if len({d.level for d in drafts}) == 1:
+            if limit > 1 and len({d.level for d in drafts}) == 1:
                 subs = _derive_subtitles(parsed, drafts, max_level=limit)
                 enriched: list[SectionDraft] = []
                 for draft in drafts:

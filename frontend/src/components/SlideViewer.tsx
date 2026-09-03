@@ -42,7 +42,7 @@ export default function SlideViewer({ pdfUrl, initialPage = 1, jumpToPage, onPag
 
   const [currentPage, setCurrentPage] = useState(initialPage)
   const [totalPages, setTotalPages] = useState(0)
-  const [scale, setScale] = useState(1.1)
+  const [, setScale] = useState(1.1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 

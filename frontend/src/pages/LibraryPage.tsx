@@ -135,6 +135,7 @@ export default function LibraryPage() {
     try {
       await api.addBooksToCourse(courseId, [addToCourseBookId])
       setAddToCourseBookId(null)
+      await refresh()
     } catch (e) { console.error(e) }
   }
 
@@ -274,7 +275,7 @@ export default function LibraryPage() {
                   <path d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </EmptyStateIcon>
-              <EmptyStateTitle>Drop a PDF or PPTX to get started</EmptyStateTitle>
+              <EmptyStateTitle>{uploading ? 'Uploading and indexing…' : 'Drop a PDF or PPTX to get started'}</EmptyStateTitle>
               <EmptyStateDescription>Your book or series slides will be parsed into sections, indexed, and ready for conversation.</EmptyStateDescription>
             </EmptyState>
           </div>

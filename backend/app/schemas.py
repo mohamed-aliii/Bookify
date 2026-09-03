@@ -18,6 +18,8 @@ class BookOut(BaseModel):
     content_start_confirmed: bool = False
     ingestion_max_level: int = 3
     content_type: str = "book"
+    course_id: int | None = None
+    course_title: str | None = None
 
 
 class SectionOut(BaseModel):
