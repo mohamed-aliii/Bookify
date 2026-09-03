@@ -72,7 +72,10 @@ def dashboard(db: Session = Depends(get_db)):
 
     books = []
     total_due = total_cards = total_mastered = 0
-    for book in db.scalars(select(Book).order_by(Book.created_at.desc(), Book.id.desc())):
+    # Exclude course (folder) books so they only appear under Courses
+    course_book_ids = select(CourseBook.book_id)
+    book_q = select(Book).where(Book.id.not_in(course_book_ids)).order_by(Book.created_at.desc(), Book.id.desc())
+    for book in db.scalars(book_q):
         c_total, c_due, c_mastered = cards_by_book.get(book.id, (0, 0, 0))
         attempt = attempts_by_book.get(book.id)
         books.append(
