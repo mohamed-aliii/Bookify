@@ -260,6 +260,7 @@ class ConceptEdge(Base):
     target_point_id: Mapped[int] = mapped_column(ForeignKey("knowledge_points.id"))
     relationship_type: Mapped[str] = mapped_column(String(50))
     strength: Mapped[float] = mapped_column(Float, default=0.5)
+    explanation: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     source: Mapped[KnowledgePoint] = relationship(foreign_keys="ConceptEdge.source_point_id")

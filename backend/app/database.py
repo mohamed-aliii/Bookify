@@ -117,6 +117,10 @@ def init_db() -> None:
         if "is_code" not in ccolumns:
             conn.execute(text("ALTER TABLE chunks ADD COLUMN is_code BOOLEAN NOT NULL DEFAULT 0"))
 
+        ec_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(concept_edges)"))}
+        if "explanation" not in ec_columns:
+            conn.execute(text("ALTER TABLE concept_edges ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"))
+
     _drop_notebooks_book_id_unique()
 
     _backup_db()

@@ -581,7 +581,6 @@ export default function BookPage() {
             activeSectionId={studySectionId}
             onSelectSection={(sid) => setStudySectionId(sid)}
             notebookFocus={notebookFocus}
-            onContentStartConfirmed={() => void refreshAll()}
           />
         ) : tab === 'progress' ? (
           <ProgressTab bookId={id} />

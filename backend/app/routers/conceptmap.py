@@ -45,7 +45,7 @@ def _extract_json_array(text: str) -> list[dict]:
 
 @router.get("/books/{book_id}/concept-graph", response_model=ConceptGraphOut)
 def get_concept_graph(book_id: int, db: Session = Depends(get_db)):
-    _load_book(db, book_id)
+    book = _load_book(db, book_id)
 
     kps = list(db.scalars(select(KnowledgePoint).where(KnowledgePoint.book_id == book_id).order_by(KnowledgePoint.id)))
     edges = list(db.scalars(select(ConceptEdge).where(ConceptEdge.source_point_id.in_([kp.id for kp in kps]))))
@@ -63,6 +63,8 @@ def get_concept_graph(book_id: int, db: Session = Depends(get_db)):
             mastery=ukp.mastery if ukp else None,
             section_id=kp.section_id,
             section_title=section.title if section else "",
+            book_id=kp.book_id,
+            book_title=book.title,
         ))
 
     graph_edges: list[ConceptGraphEdge] = []
@@ -74,6 +76,7 @@ def get_concept_graph(book_id: int, db: Session = Depends(get_db)):
                 target=edge.target_point_id,
                 relationship_type=edge.relationship_type,
                 strength=edge.strength,
+                explanation=edge.explanation or None,
             ))
 
     return ConceptGraphOut(nodes=nodes, edges=graph_edges)
@@ -127,6 +130,7 @@ def extract_concept_edges(book_id: int, body: GraphExtractRequest, db: Session =
         tgt = item.get("target_id")
         rel = str(item.get("relationship", "related")).strip()
         strength = float(item.get("strength", 0.5))
+        explanation = str(item.get("explanation", "")).strip()[:2000]
 
         if not isinstance(src, int) or not isinstance(tgt, int) or src == tgt:
             continue
@@ -145,6 +149,7 @@ def extract_concept_edges(book_id: int, body: GraphExtractRequest, db: Session =
             target_point_id=tgt,
             relationship_type=rel,
             strength=max(0.0, min(1.0, strength)),
+            explanation=explanation,
         )
         db.add(edge)
         created += 1
@@ -169,7 +174,12 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
     kp_created = _extract_section_kps(db, book_id, section, force=body.force)
     db.commit()
 
-    section_kp_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.section_id == section_id).order_by(KnowledgePoint.id)))
+    # Deep: collect KPs from all leaf sections under this chapter
+    from ..routers.intelligence import _leaf_sections_for_chapter
+    leaf_ids = [lf.id for lf in _leaf_sections_for_chapter(db, book_id, section)]
+    if not leaf_ids:
+        leaf_ids = [section_id]
+    section_kp_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.section_id.in_(leaf_ids)).order_by(KnowledgePoint.id)))
     if not section_kp_ids:
         return {"ok": True, "created": 0, "message": "No knowledge points extracted for this chapter"}
 
@@ -202,6 +212,7 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
         tgt = item.get("target_id")
         rel = str(item.get("relationship", "related")).strip()
         strength = float(item.get("strength", 0.5))
+        explanation = str(item.get("explanation", "")).strip()[:2000]
 
         if not isinstance(src, int) or not isinstance(tgt, int) or src == tgt:
             continue
@@ -222,6 +233,7 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
             target_point_id=tgt,
             relationship_type=rel,
             strength=max(0.0, min(1.0, strength)),
+            explanation=explanation,
         )
         db.add(edge)
         created += 1
@@ -250,11 +262,11 @@ def get_kp_detail(book_id: int, kp_id: int, db: Session = Depends(get_db)):
     for edge in outgoing:
         target = db.get(KnowledgePoint, edge.target_point_id)
         if target:
-            connections.append({"kp_id": target.id, "name": target.name, "direction": "outgoing", "relationship_type": edge.relationship_type, "strength": edge.strength})
+            connections.append({"kp_id": target.id, "name": target.name, "direction": "outgoing", "relationship_type": edge.relationship_type, "strength": edge.strength, "explanation": edge.explanation or ""})
     for edge in incoming:
         source = db.get(KnowledgePoint, edge.source_point_id)
         if source:
-            connections.append({"kp_id": source.id, "name": source.name, "direction": "incoming", "relationship_type": edge.relationship_type, "strength": edge.strength})
+            connections.append({"kp_id": source.id, "name": source.name, "direction": "incoming", "relationship_type": edge.relationship_type, "strength": edge.strength, "explanation": edge.explanation or ""})
 
     return {
         "id": kp.id,

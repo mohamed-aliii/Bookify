@@ -312,6 +312,8 @@ class ConceptGraphNode(BaseModel):
     mastery: float | None
     section_id: int
     section_title: str
+    book_id: int | None = None
+    book_title: str | None = None
 
 
 class ConceptGraphEdge(BaseModel):
@@ -320,6 +322,7 @@ class ConceptGraphEdge(BaseModel):
     target: int
     relationship_type: str
     strength: float
+    explanation: str | None = None
 
 
 class ConceptGraphOut(BaseModel):

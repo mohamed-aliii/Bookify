@@ -192,10 +192,15 @@ def get_unified_graph(db: Session = Depends(get_db)):
     kps = list(db.scalars(select(KnowledgePoint).order_by(KnowledgePoint.id)))
     kp_map = {kp.id: kp for kp in kps}
 
+    book_cache: dict[int, Book] = {}
     nodes: list[ConceptGraphNode] = []
     for kp in kps:
         ukp = db.scalar(select(UserKnowledgePoint).where(UserKnowledgePoint.knowledge_point_id == kp.id))
         section = db.get(Section, kp.section_id)
+        bk = book_cache.get(kp.book_id)
+        if bk is None:
+            bk = db.get(Book, kp.book_id)
+            if bk: book_cache[kp.book_id] = bk
         nodes.append(ConceptGraphNode(
             id=kp.id,
             name=kp.name,
@@ -204,6 +209,8 @@ def get_unified_graph(db: Session = Depends(get_db)):
             mastery=ukp.mastery if ukp else None,
             section_id=kp.section_id,
             section_title=section.title if section else "",
+            book_id=kp.book_id,
+            book_title=bk.title if bk else None,
         ))
 
     intra_edges = list(db.scalars(select(ConceptEdge)))

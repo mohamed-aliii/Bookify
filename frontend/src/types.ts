@@ -295,6 +295,8 @@ export interface ConceptGraphNode {
   mastery: number | null
   section_id: number
   section_title: string
+  book_id?: number | null
+  book_title?: string | null
 }
 
 export interface ConceptGraphEdge {
@@ -303,6 +305,7 @@ export interface ConceptGraphEdge {
   target: number
   relationship_type: string
   strength: number
+  explanation?: string | null
 }
 
 export interface ConceptGraph {

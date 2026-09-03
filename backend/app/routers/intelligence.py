@@ -25,7 +25,8 @@ from ..schemas import KnowledgePointOut, UserKnowledgePointOut, WeakAreaOut
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["intelligence"])
 
-KP_TARGET_PER_SECTION = 5
+KP_SOFT_MIN = 6
+KP_SOFT_MAX = 30
 
 
 def _sse(payload: dict) -> str:
@@ -126,42 +127,111 @@ class KPExtractRequest(BaseModel):
     limit: int = 12
 
 
-def _extract_section_kps(db: Session, book_id: int, section: Section, force: bool = False) -> int:
+def _leaf_sections_for_chapter(db: Session, book_id: int, chapter: Section) -> list[Section]:
+    """Return leaf descendant sections for a chapter, section-by-section.
+    If chapter has no children, returns [chapter]."""
     from ..models import Section as SectionModel
+    # All sections for this book ordered by ord
+    all_secs = list(db.scalars(select(SectionModel).where(SectionModel.book_id == book_id).order_by(SectionModel.ord)))
+    # Build parent -> children map
+    children_map: dict[int | None, list[SectionModel]] = {}
+    for s in all_secs:
+        children_map.setdefault(s.parent_id, []).append(s)
+    # Get all descendant ids under chapter (including chapter)
+    from .study import _descendant_section_ids
+    desc_ids = set(_descendant_section_ids(db, book_id, chapter.id))
+    # Leaves = ids that are not a parent of anyone in desc set
+    parent_ids = {s.parent_id for s in all_secs if s.parent_id in desc_ids}
+    leaves = [s for s in all_secs if s.id in desc_ids and s.id not in parent_ids]
+    # If chapter itself is leaf (no children), leaves will be [chapter]
+    if not leaves:
+        leaves = [chapter]
+    # Sort by ord to keep reading order
+    leaves.sort(key=lambda s: s.ord)
+    return leaves
 
-    existing_in_section = db.scalar(select(KnowledgePoint).where(KnowledgePoint.section_id == section.id).limit(1))
-    if existing_in_section is not None and not force:
-        return 0
 
-    chunks = _section_all_chunks(db, book_id, section.id)
+def _extract_single_leaf_kps(db: Session, book_id: int, leaf: Section) -> list[dict]:
+    """Extract KPs for a single leaf section, soft 6-30 hint, 50-200w not needed here."""
+    chunks = _section_all_chunks(db, book_id, leaf.id)
     if not chunks:
-        return 0
+        return []
     total_chars = sum(len(c.text) for c in chunks)
-    auto_count = max(3, min(KP_TARGET_PER_SECTION, round(total_chars / 4000)))
-    excerpt_chunks = _spread(chunks, 20)
+    # Soft hint: denser leaves suggest more points, but LLM decides
+    hint_count = max(KP_SOFT_MIN, min(KP_SOFT_MAX, round(total_chars / 1600) if total_chars > 0 else KP_SOFT_MIN))
+    if total_chars < 800:
+        hint_count = max(4, hint_count)  # thin leaf still 4-6
+    hint_text = f"This leaf section '{leaf.title}' has ~{total_chars} chars. Soft guidance: aim for thorough coverage (typically {hint_count} points within {KP_SOFT_MIN}-{KP_SOFT_MAX} per chapter when summed across leaves). No hard cap."
+
+    # For leaf, use up to 30 excerpts (leaf is small, often all)
+    excerpt_chunks = _spread(chunks, 30)
     excerpts = _excerpts_text(excerpt_chunks)
 
     messages = [
-        {"role": "system", "content": _prompt_text("knowledge_points.txt", {"count": auto_count})},
-        {"role": "user", "content": f"Excerpts from \"{section.title}\":\n\n{excerpts}\n\nExtract the knowledge points now."},
+        {"role": "system", "content": _prompt_text("knowledge_points_deep.txt", {"hint_text": hint_text})},
+        {"role": "user", "content": f"Excerpts from \"{leaf.title}\" (chapter: leaf):\n\n{excerpts}\n\nExtract knowledge points now."},
     ]
     try:
         raw = llm_client.complete(messages)
         items = _extract_json_array(raw)
+        return items
     except Exception as exc:
-        logger.warning("KP extraction failed for section %s: %s", section.title, exc)
+        logger.warning("Deep KP extraction failed for leaf %s: %s", leaf.title, exc)
+        return []
+
+
+def _extract_section_kps(db: Session, book_id: int, section: Section, force: bool = False) -> int:
+    """Deep section-by-section extraction with soft cap 6-30 per chapter (summed across leaves)."""
+    from ..models import Section as SectionModel
+
+    # If this is a leaf-level section (no children) and not a chapter, keep single-leaf path for direct calls
+    # Check existing at chapter level: if any leaf already has KPs and not force, skip
+    leaves = _leaf_sections_for_chapter(db, book_id, section)
+    if not force:
+        # If any leaf under this chapter already has KPs, skip to avoid re-extract
+        for lf in leaves:
+            existing = db.scalar(select(KnowledgePoint).where(KnowledgePoint.section_id == lf.id).limit(1))
+            if existing is not None:
+                return 0
+
+    # Collect per leaf
+    all_items: list[dict] = []
+    leaf_id_for_item: list[int] = []  # parallel to all_items to know which leaf produced it
+    for leaf in leaves:
+        items = _extract_single_leaf_kps(db, book_id, leaf)
+        for it in items:
+            all_items.append(it)
+            leaf_id_for_item.append(leaf.id)
+
+    if not all_items:
         return 0
 
+    # Dedup by normalized name (case-insensitive) to keep graph clean
+    seen_names: set[str] = set()
+    deduped: list[tuple[dict, int]] = []
+    for it, leaf_id in zip(all_items, leaf_id_for_item):
+        name_norm = str(it.get("name", "")).strip().lower()
+        if not name_norm or name_norm in seen_names:
+            continue
+        seen_names.add(name_norm)
+        deduped.append((it, leaf_id))
+
+    # Soft cap: if deduped exceeds KP_SOFT_MAX per chapter, keep highest quality (keep insertion order, LLM already prioritized)
+    if len(deduped) > KP_SOFT_MAX:
+        deduped = deduped[:KP_SOFT_MAX]
+    # Ensure at least soft min if possible (if LLM returned very few, keep as is)
+
     total_created = 0
-    for item in items:
+    for item, leaf_id in deduped:
         name = str(item.get("name", "")).strip()
         desc = str(item.get("description", "")).strip()
         diff = float(item.get("difficulty", 0.5))
         if not name or not desc:
             continue
+        # Store against the leaf section for precise provenance, not the chapter
         kp = KnowledgePoint(
             book_id=book_id,
-            section_id=section.id,
+            section_id=leaf_id,
             name=name,
             description=desc,
             difficulty=max(0.0, min(1.0, diff)),
@@ -183,9 +253,10 @@ def extract_knowledge_points(book_id: int, body: KPExtractRequest, db: Session =
 
     for section in sections:
         if body.force:
-            existing_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.section_id == section.id)))
+            leaf_ids = [lf.id for lf in _leaf_sections_for_chapter(db, book_id, section)]
+            existing_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.section_id.in_(leaf_ids)))) if leaf_ids else []
             if existing_ids:
-                db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id == section.id))
+                db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id.in_(leaf_ids)))
                 db.execute(delete(ConceptEdge).where(or_(ConceptEdge.source_point_id.in_(existing_ids), ConceptEdge.target_point_id.in_(existing_ids))))
             db.flush()
         total_created += _extract_section_kps(db, book_id, section, force=body.force)
@@ -208,9 +279,12 @@ def extract_section_knowledge_points(book_id: int, section_id: int, body: KPSect
         raise HTTPException(status_code=404, detail="Section not found")
 
     if body.force:
-        existing_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.section_id == section_id)))
+        leaf_ids = [lf.id for lf in _leaf_sections_for_chapter(db, book_id, section)]
+        if not leaf_ids:
+            leaf_ids = [section_id]
+        existing_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.section_id.in_(leaf_ids))))
         if existing_ids:
-            db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id == section_id))
+            db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id.in_(leaf_ids)))
             db.execute(delete(ConceptEdge).where(or_(ConceptEdge.source_point_id.in_(existing_ids), ConceptEdge.target_point_id.in_(existing_ids))))
         db.flush()
 
