@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 
+from sqlalchemy import select
+
 from .chunker import ChunkDraft, SectionDraft, make_chunks
 from .config import settings
 from .embeddings import embedding_client
