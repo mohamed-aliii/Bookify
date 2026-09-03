@@ -285,7 +285,19 @@ def ingest_book(book_id: int) -> None:
         db.flush()
         old_sec_ids = list(db.scalars(select(Section.id).where(Section.book_id == book.id)))
         if old_sec_ids:
-            from .models import ChatSession, CodeBlock, Flashcard, QuizAttempt, QuizError, ReadingProgress, SectionSummary
+            from .models import (
+                ChatSession,
+                CodeBlock,
+                Flashcard,
+                KnowledgePoint,
+                Note,
+                Notebook,
+                QuizAttempt,
+                QuizError,
+                ReadingProgress,
+                SectionSummary,
+                VocabWord,
+            )
             db.execute(delete(Chunk).where(Chunk.book_id == book.id))
             db.execute(delete(Flashcard).where(Flashcard.section_id.in_(old_sec_ids)))
             db.execute(delete(QuizAttempt).where(QuizAttempt.section_id.in_(old_sec_ids)))
@@ -294,6 +306,10 @@ def ingest_book(book_id: int) -> None:
             db.execute(delete(CodeBlock).where(CodeBlock.book_id == book.id))
             db.execute(delete(ChatSession).where(ChatSession.section_id.in_(old_sec_ids)))
             db.execute(delete(ReadingProgress).where(ReadingProgress.section_id.in_(old_sec_ids)))
+            db.execute(delete(VocabWord).where(VocabWord.section_id.in_(old_sec_ids)))
+            db.execute(delete(Note).where(Note.section_id.in_(old_sec_ids)))
+            db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id.in_(old_sec_ids)))
+            db.execute(delete(Notebook).where(Notebook.section_id.in_(old_sec_ids)))
             db.execute(delete(Section).where(Section.book_id == book.id))
             db.flush()
 
