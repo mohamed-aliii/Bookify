@@ -173,53 +173,104 @@ export default function CourseListPage() {
             <p className="text-xs text-slate-600">Create a course to organize your books and slides</p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {courses.map(c => (
-              <div
-                key={c.id}
-                onClick={() => nav(`/courses/${c.id}`)}
-                className="group cursor-pointer rounded-2xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/5"
-              >
-                <div className="mb-2.5 flex items-start gap-3">
-                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20 transition-colors group-hover:bg-indigo-500/20 group-hover:text-indigo-300">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
-                      <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </div>
-                  <div className="min-w-0 flex-1 pt-0.5">
-                    <h3 className="truncate text-sm font-semibold text-white transition-colors group-hover:text-indigo-200">{c.title}</h3>
-                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-400">
-                      <span>{c.book_count} {c.book_count === 1 ? 'material' : 'materials'}</span>
+          <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            {courses.map(c => {
+              const totalPages = c.books?.reduce((sum, b) => sum + (b.book_num_pages || 0), 0) || 0
+              const slideCount = c.books?.filter(b => b.book_content_type === 'slides').length || 0
+              const bookCount = c.book_count - slideCount
+
+              return (
+                <div
+                  key={c.id}
+                  onClick={() => nav(`/courses/${c.id}`)}
+                  className="group flex flex-col justify-between cursor-pointer rounded-2xl border border-white/[0.08] bg-surface-1 p-5 sm:p-6 transition-all duration-200 hover:border-indigo-500/40 hover:bg-surface-2/60 hover:shadow-xl hover:shadow-indigo-500/5 min-h-[220px]"
+                >
+                  <div>
+                    <div className="flex items-start gap-4">
+                      <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20 transition-all duration-200 group-hover:bg-indigo-500/20 group-hover:scale-105 group-hover:text-indigo-300">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-6 w-6">
+                          <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" strokeLinecap="round" strokeLinejoin="round"/>
+                        </svg>
+                      </div>
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-start justify-between gap-2">
+                          <h3 className="text-base font-semibold text-white transition-colors group-hover:text-indigo-200 line-clamp-2 leading-snug">
+                            {c.title}
+                          </h3>
+                          <button
+                            onClick={(e) => handleDelete(e, c.id)}
+                            title="Delete course"
+                            className="flex-shrink-0 rounded-lg p-1.5 text-slate-500 opacity-0 transition-opacity hover:bg-red-500/10 hover:text-red-400 group-hover:opacity-100"
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                              <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          </button>
+                        </div>
+
+                        <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                          <span className="inline-flex items-center gap-1 rounded-md bg-indigo-500/10 px-2 py-0.5 font-medium text-indigo-300 border border-indigo-500/20">
+                            {c.book_count} {c.book_count === 1 ? 'item' : 'items'}
+                          </span>
+                          {totalPages > 0 && (
+                            <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-0.5 text-slate-400 border border-white/[0.06]">
+                              {totalPages} pages/slides
+                            </span>
+                          )}
+                          {slideCount > 0 && bookCount > 0 && (
+                            <span className="text-[11px] text-slate-500">
+                              ({slideCount} slides, {bookCount} docs)
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                  <button
-                    onClick={(e) => handleDelete(e, c.id)}
-                    className="flex-shrink-0 rounded-lg p-1 text-slate-600 opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-                  >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-                      <path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" strokeLinecap="round" strokeLinejoin="round"/>
-                    </svg>
-                  </button>
-                </div>
-                {c.description && (
-                  <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-slate-300">{c.description}</p>
-                )}
-                {c.books.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-1">
-                    {c.books.slice(0, 3).map(cb => (
-                      <span key={cb.id} className="rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-slate-500">
-                        {cb.book_title.length > 20 ? cb.book_title.slice(0, 20) + '...' : cb.book_title}
-                      </span>
-                    ))}
-                    {c.books.length > 3 && (
-                      <span className="rounded-md bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-slate-600">
-                        +{c.books.length - 3} more
-                      </span>
+
+                    {c.description ? (
+                      <p className="mt-3.5 text-sm leading-relaxed text-slate-300 line-clamp-4">
+                        {c.description}
+                      </p>
+                    ) : (
+                      <p className="mt-3.5 text-xs italic text-slate-600">
+                        No description provided.
+                      </p>
                     )}
                   </div>
-                )}
-              </div>
-            ))}
+
+                  {c.books && c.books.length > 0 && (
+                    <div className="mt-5 pt-3.5 border-t border-white/[0.06]">
+                      <div className="mb-2 flex items-center justify-between text-[11px] font-medium text-slate-400">
+                        <span>Included Materials</span>
+                        <span className="text-indigo-400 group-hover:translate-x-0.5 transition-transform">View all &rarr;</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {c.books.slice(0, 5).map(cb => (
+                          <span
+                            key={cb.id}
+                            className="inline-flex items-center gap-1 rounded-lg bg-white/[0.04] px-2.5 py-1 text-xs text-slate-300 border border-white/[0.04] group-hover:border-white/[0.08]"
+                          >
+                            <span className="truncate max-w-[140px] sm:max-w-[180px]">
+                              {cb.book_title}
+                            </span>
+                            {cb.book_num_pages > 0 && (
+                              <span className="text-[10px] text-slate-500 font-mono">
+                                ({cb.book_num_pages}p)
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                        {c.books.length > 5 && (
+                          <span className="rounded-lg bg-white/[0.03] px-2 py-1 text-xs text-slate-500 font-medium">
+                            +{c.books.length - 5} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
       </div>
