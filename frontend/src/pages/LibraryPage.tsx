@@ -275,7 +275,7 @@ export default function LibraryPage() {
                 </svg>
               </EmptyStateIcon>
               <EmptyStateTitle>Drop a PDF or PPTX to get started</EmptyStateTitle>
-              <EmptyStateDescription>Your book or course slides will be parsed into sections, indexed, and ready for conversation.</EmptyStateDescription>
+              <EmptyStateDescription>Your book or series slides will be parsed into sections, indexed, and ready for conversation.</EmptyStateDescription>
             </EmptyState>
           </div>
         ) : (
@@ -393,7 +393,7 @@ export default function LibraryPage() {
                             <button
                               onClick={(e) => { e.stopPropagation(); setAddToCourseBookId(addToCourseBookId === book.id ? null : book.id) }}
                               disabled={busy || courses.length === 0}
-                              title="Add to course"
+                              title="Add to series"
                               className="pointer-events-auto btn-icon !p-1.5"
                             >
                               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
@@ -403,7 +403,7 @@ export default function LibraryPage() {
                             </button>
                             {addToCourseBookId === book.id && courses.length > 0 && (
                               <div className="absolute right-0 bottom-full mb-1 z-30 w-48 rounded-xl border border-white/[0.08] bg-surface-2 p-1 shadow-glass" onClick={e => e.stopPropagation()}>
-                                <p className="px-2 py-1 text-[10px] text-slate-500">Add to course</p>
+                                <p className="px-2 py-1 text-[10px] text-slate-500">Add to series</p>
                                 {courses.map(c => (
                                   <button
                                     key={c.id}

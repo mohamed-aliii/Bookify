@@ -43,7 +43,7 @@ export default function CoursePage() {
   }
 
   const handleRemoveBook = async (bookId: number) => {
-    if (!confirm('Remove this book from the course?')) return
+    if (!confirm('Remove this book from the series?')) return
     await api.removeBookFromCourse(cid, bookId)
     await load()
   }
@@ -71,7 +71,7 @@ export default function CoursePage() {
   }
 
   const handleDelete = async () => {
-    if (!confirm('Delete this course? Books will not be deleted.')) return
+    if (!confirm('Delete this series? Books will not be deleted.')) return
     await api.deleteCourse(cid)
     nav('/courses')
   }
@@ -217,7 +217,7 @@ export default function CoursePage() {
               {addingFiles ? 'Uploading...' : '+ Add Files'}
             </button>
             {course.books.length === 0 ? (
-              <div className="py-10 text-center text-xs text-slate-600">No books in this course yet</div>
+              <div className="py-10 text-center text-xs text-slate-600">No books in this series yet</div>
             ) : (
               course.books.map((cb, i) => (
                 <div key={cb.id} className="flex items-center gap-3 rounded-xl border border-white/[0.06] bg-surface-1 p-3">

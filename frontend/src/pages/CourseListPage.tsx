@@ -43,7 +43,7 @@ export default function CourseListPage() {
     setMultiFiles(Array.from(files))
     setShowCreate(true)
     if (!newTitle.trim()) {
-      setNewTitle(files[0]?.name?.replace(/\.(pdf|pptx)$/i, '') || 'New Course')
+      setNewTitle(files[0]?.name?.replace(/\.(pdf|pptx)$/i, '') || 'New Series')
     }
     e.target.value = ''
   }
@@ -76,7 +76,7 @@ export default function CourseListPage() {
 
   const handleDelete = async (e: React.MouseEvent, id: number) => {
     e.stopPropagation()
-    if (!confirm('Delete this course? Books will not be deleted.')) return
+    if (!confirm('Delete this series? Books will not be deleted.')) return
     try {
       await api.deleteCourse(id)
       await load()
@@ -93,12 +93,12 @@ export default function CourseListPage() {
   }
 
   return (
-    <AppShell header={<span className="text-sm font-semibold text-white">Courses</span>}>
+    <AppShell header={<span className="text-sm font-semibold text-white">Series</span>}>
       <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6 lg:px-8">
         <div className="mb-6 flex items-center justify-between">
           <div>
-            <h1 className="text-lg font-semibold text-white">Your Courses</h1>
-            <p className="mt-1 text-xs text-slate-500">Organize books and slides into courses</p>
+            <h1 className="text-lg font-semibold text-white">Your Series</h1>
+            <p className="mt-1 text-xs text-slate-500">Organize books and slides into series</p>
           </div>
           <div className="flex gap-2">
             <input
@@ -120,7 +120,7 @@ export default function CourseListPage() {
               onClick={() => setShowCreate(true)}
               className="rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
             >
-              + New Course
+              + New Series
             </button>
           </div>
         </div>
@@ -128,7 +128,7 @@ export default function CourseListPage() {
         {showCreate && (
           <div className="mb-6 rounded-2xl border border-white/[0.08] bg-surface-1 p-5">
             <h3 className="mb-3 text-sm font-semibold text-white">
-              {multiFiles.length > 0 ? `Create Course from ${multiFiles.length} Files` : 'New Course'}
+              {multiFiles.length > 0 ? `Create Series from ${multiFiles.length} Files` : 'New Series'}
             </h3>
             {multiFiles.length > 0 && (
               <div className="mb-3 text-xs text-slate-400">
@@ -137,7 +137,7 @@ export default function CourseListPage() {
             )}
             <input
               type="text"
-              placeholder="Course title"
+              placeholder="Series title"
               value={newTitle}
               onChange={e => setNewTitle(e.target.value)}
               className="mb-2 w-full rounded-xl border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-indigo-500/50"
@@ -177,8 +177,8 @@ export default function CourseListPage() {
               <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
               <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
-            <p className="mb-2 text-sm text-slate-400">No courses yet</p>
-            <p className="text-xs text-slate-600">Create a course to organize your books and slides</p>
+            <p className="mb-2 text-sm text-slate-400">No series yet</p>
+            <p className="text-xs text-slate-600">Create a series to organize your books and slides</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
