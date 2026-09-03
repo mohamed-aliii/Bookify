@@ -180,17 +180,17 @@ export default function CourseListPage() {
                 onClick={() => nav(`/courses/${c.id}`)}
                 className="group cursor-pointer rounded-2xl border border-white/[0.06] bg-surface-1 p-4 transition-all hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/5"
               >
-                <div className="mb-3 flex items-start gap-3">
-                  <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20 transition-colors group-hover:bg-indigo-500/20 group-hover:text-indigo-300">
+                <div className="mb-2.5 flex items-start gap-3">
+                  <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20 transition-colors group-hover:bg-indigo-500/20 group-hover:text-indigo-300">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
                       <path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" strokeLinecap="round" strokeLinejoin="round"/>
                     </svg>
                   </div>
-                  <div className="min-w-0 flex-1">
+                  <div className="min-w-0 flex-1 pt-0.5">
                     <h3 className="truncate text-sm font-semibold text-white transition-colors group-hover:text-indigo-200">{c.title}</h3>
-                    {c.description && (
-                      <p className="mt-0.5 truncate text-xs text-slate-500">{c.description}</p>
-                    )}
+                    <div className="mt-0.5 flex items-center gap-2 text-[11px] text-slate-400">
+                      <span>{c.book_count} {c.book_count === 1 ? 'material' : 'materials'}</span>
+                    </div>
                   </div>
                   <button
                     onClick={(e) => handleDelete(e, c.id)}
@@ -201,9 +201,9 @@ export default function CourseListPage() {
                     </svg>
                   </button>
                 </div>
-                <div className="flex items-center gap-3 text-xs text-slate-500">
-                  <span>{c.book_count} {c.book_count === 1 ? 'book' : 'books'}</span>
-                </div>
+                {c.description && (
+                  <p className="mb-3 line-clamp-2 text-xs leading-relaxed text-slate-300">{c.description}</p>
+                )}
                 {c.books.length > 0 && (
                   <div className="mt-3 flex flex-wrap gap-1">
                     {c.books.slice(0, 3).map(cb => (

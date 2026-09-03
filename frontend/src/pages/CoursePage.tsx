@@ -165,7 +165,7 @@ export default function CoursePage() {
             ) : (
               <>
                 <h1 className="text-lg font-bold text-white">{course.title}</h1>
-                {course.description && <p className="mt-1 text-xs text-slate-500">{course.description}</p>}
+                {course.description && <p className="mt-1.5 max-w-3xl text-sm leading-relaxed text-slate-300">{course.description}</p>}
               </>
             )}
           </div>
