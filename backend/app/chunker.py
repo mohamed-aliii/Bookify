@@ -31,6 +31,33 @@ def _normalize_title(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", value.lower()).strip()
 
 
+def normalize_slide_title(title: str) -> str:
+    t = (title or "").strip()
+    # Remove citations like (Oord et al., 2016) or [Author, 2020]
+    t = re.sub(r"\s*[\(\[][A-Z][a-zA-Z\s\.,&]+(19|20)\d{2}[a-z]?[\)\]]", "", t)
+    # Remove continuation suffixes like (cont.), (continued), (2), - Part 2, etc.
+    t = re.sub(r"\s*[\(\[](cont|cont\'d|continued|part\s*\d+|\d+/\d+|\d+)[\.\)\]]*", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*-\s*part\s*\d+", "", t, flags=re.IGNORECASE)
+    t = re.sub(r"\s*:\s*continued", "", t, flags=re.IGNORECASE)
+    # Remove trailing punctuation
+    t = re.sub(r"[\s:,\-]+$", "", t)
+    return re.sub(r"\s+", " ", t).strip().lower()
+
+
+def is_same_slide_topic(title_a: str, title_b: str) -> bool:
+    norm_a = normalize_slide_title(title_a)
+    norm_b = normalize_slide_title(title_b)
+    if not norm_a or not norm_b:
+        return False
+    # Exact normalized match
+    if norm_a == norm_b:
+        return True
+    # One is prefix of the other (e.g. "Pixel RNN" vs "Pixel RNN (Oord et al., 2016)")
+    if (len(norm_a) >= 5 and norm_b.startswith(norm_a)) or (len(norm_b) >= 5 and norm_a.startswith(norm_b)):
+        return True
+    return False
+
+
 def _is_front_matter_title(title: str, blacklist: tuple[str, ...]) -> bool:
     norm = _normalize_title(title)
     if not norm:
@@ -164,21 +191,27 @@ def build_sections(parsed: ParsedBook, max_level: int | None = None) -> list[Sec
             continue
         candidates.append((block.page, title))
 
-    title_counts = Counter(t.lower() for _, t in candidates)
+    # Detect recurring running headers/footers using cluster occurrences (non-consecutive runs)
+    clusters: list[str] = []
+    for _, title in candidates:
+        norm = normalize_slide_title(title)
+        if not clusters or clusters[-1] != norm:
+            clusters.append(norm)
+    cluster_counts = Counter(clusters)
     page_count = max(parsed.num_pages, 1)
-    recurring = {t for t, n in title_counts.items() if n > 3 and (n > page_count * 0.10 or n > 6)}
+    recurring = {t for t, n in cluster_counts.items() if n > 3 and (n > page_count * 0.12 or n > 6)}
 
     for pno, title in candidates:
-        if title.lower() in recurring:
+        norm = normalize_slide_title(title)
+        if norm in recurring:
             continue
-        if drafts and (
-            title.lower() == drafts[-1].title.lower()
-            or title.lower().startswith(drafts[-1].title.lower() + " ")
-            or (drafts[-1].title.lower() in title.lower() and len(drafts[-1].title) > 6)
-        ):
-            continue
-        if drafts and pno == drafts[-1].page_start:
-            continue
+        if drafts:
+            # Check if this slide continues the previous section
+            if is_same_slide_topic(drafts[-1].title, title):
+                continue
+            # Avoid duplicate section on exact same page
+            if pno == drafts[-1].page_start:
+                continue
         drafts.append(SectionDraft(title=title, level=1, page_start=pno))
 
     if not drafts:

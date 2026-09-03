@@ -65,34 +65,43 @@ def extract_cover(book_path: str, dest_dir: Path | None = None) -> str | None:
 
 
 def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[list[SectionDraft], list[ChunkDraft], int]:
-    """Build slide-aware sections (one per slide) and chunk drafts that group slides."""
+    """Build slide-aware sections (merging consecutive slides with identical/related topics) and chunk drafts."""
+    from .chunker import is_same_slide_topic
+
     sections: list[SectionDraft] = []
+    slide_to_sec_idx: dict[int, int] = {}
     for s in slides:
         title = (s.title or f"Slide {s.slide_number}").strip()
         if len(title) > 200:
             title = title[:200]
-        sections.append(SectionDraft(title=title, level=1, page_start=s.slide_number))
+        if sections and is_same_slide_topic(sections[-1].title, title):
+            # Consecutive slide with same topic -> group into previous section
+            slide_to_sec_idx[s.slide_number] = len(sections) - 1
+        else:
+            sections.append(SectionDraft(title=title, level=1, page_start=s.slide_number))
+            slide_to_sec_idx[s.slide_number] = len(sections) - 1
 
     # Group slides into chunks of ~chunk_chars
     chunk_drafts: list[ChunkDraft] = []
     current_texts: list[str] = []
     current_pages: list[int] = []
     cur_len = 0
-    start_idx = 0
     ord_counter = 0
 
     def _flush():
-        nonlocal current_texts, current_pages, cur_len, start_idx, ord_counter
+        nonlocal current_texts, current_pages, cur_len, ord_counter
         if not current_texts:
             return
         text = "\n\n".join(current_texts).strip()
         if text:
+            first_pno = min(current_pages)
+            sec_idx = slide_to_sec_idx.get(first_pno, 0)
             chunk_drafts.append(
                 ChunkDraft(
                     text=text,
-                    section_index=start_idx,
-                    section_title=sections[start_idx].title,
-                    page_start=min(current_pages),
+                    section_index=sec_idx,
+                    section_title=sections[sec_idx].title,
+                    page_start=first_pno,
                     page_end=max(current_pages),
                     ord=ord_counter,
                     is_code=False,
@@ -102,7 +111,7 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
         current_texts, current_pages, cur_len = [], [], 0
 
     tail = ""
-    for idx, s in enumerate(slides):
+    for s in slides:
         raw = (s.raw_text or "").strip()
         if not raw:
             continue
@@ -111,18 +120,18 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
             # flush current before splitting long slide
             if current_texts:
                 _flush()
-                start_idx = idx
                 tail = ""
             # split long slide text
             from .chunker import _split_long
 
             parts = _split_long(raw, chunk_chars, chunk_overlap)
+            sec_idx = slide_to_sec_idx.get(s.slide_number, 0)
             for piece in parts:
                 chunk_drafts.append(
                     ChunkDraft(
                         text=piece,
-                        section_index=idx,
-                        section_title=sections[idx].title,
+                        section_index=sec_idx,
+                        section_title=sections[sec_idx].title,
                         page_start=s.slide_number,
                         page_end=s.slide_number,
                         ord=ord_counter,
@@ -130,23 +139,19 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
                     )
                 )
                 ord_counter += 1
-            start_idx = idx + 1 if idx + 1 < len(slides) else idx
             continue
 
         if cur_len and cur_len + len(raw) + 2 > chunk_chars:
             _flush()
-            start_idx = idx
             if chunk_overlap > 0 and tail:
                 head = tail[-chunk_overlap:]
                 current_texts.append(head)
-                cur_len = len(head)
+                cur_len += len(head)
 
-        if not current_texts:
-            start_idx = idx
         current_texts.append(raw)
         current_pages.append(s.slide_number)
         cur_len += len(raw) + 2
-        tail = "\n\n".join(current_texts)
+        tail = raw
 
     _flush()
     return sections, chunk_drafts, 0
@@ -273,17 +278,9 @@ def ingest_book(book_id: int) -> None:
         for i, sec in enumerate(sections):
             if i < content_start_index:
                 continue
-            if is_slides:
-                # Each slide is a single page
+            end = sections[i + 1].page_start - 1 if i + 1 < len(sections) else book.num_pages
+            if end < sec.page_start:
                 end = sec.page_start
-            else:
-                end = sections[i + 1].page_start if i + 1 < len(sections) else book.num_pages
-                if end < sec.page_start:
-                    end = sec.page_start
-                else:
-                    # book sections use exclusive end (next start), convert to inclusive for page_end
-                    if i + 1 < len(sections):
-                        end = end - 1 if end > sec.page_start else end
             while stack and stack[-1].level >= sec.level:
                 stack.pop()
             parent_id = stack[-1].id if stack else None
