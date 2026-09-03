@@ -58,13 +58,14 @@ def _body_font_size(parsed: ParsedBook) -> float:
     return sizes.most_common(1)[0][0]
 
 
-def _derive_subtitles(parsed: ParsedBook, chapters: list[SectionDraft]) -> dict[int, list[SectionDraft]]:
+def _derive_subtitles(parsed: ParsedBook, chapters: list[SectionDraft], max_level: int | None = None) -> dict[int, list[SectionDraft]]:
     """Find real section subtitles typographically for flat-TOC books.
 
     Picks the dominant heading font tier (1.5x-2.4x body size), keeps clean
     single-line titles, drops recurring decorative labels, and groups results
     under their chapter.
     """
+    effective_max = max_level if max_level is not None else settings.ingestion.max_toc_level
     body = _body_font_size(parsed)
     tier_sizes = Counter(
         round(b.size, 1)
@@ -113,7 +114,7 @@ def _derive_subtitles(parsed: ParsedBook, chapters: list[SectionDraft]) -> dict[
             or (b.page == bucket[-1].page_start and bucket[-1].title.lower() == title_lower)
         ):
             continue
-        level = min(chapter.level + 1, settings.ingestion.max_toc_level)
+        level = min(chapter.level + 1, effective_max)
         bucket.append(SectionDraft(title=b.text.strip(), level=level, page_start=b.page))
     return subs_by_chapter
 
@@ -143,8 +144,8 @@ def build_sections(parsed: ParsedBook, max_level: int | None = None) -> list[Sec
         if drafts:
             if drafts[0].page_start > 1:
                 drafts.insert(0, SectionDraft(title="Front matter", level=drafts[0].level, page_start=1))
-            if len({d.level for d in drafts}) == 1:
-                subs = _derive_subtitles(parsed, drafts)
+            if limit > 1 and len({d.level for d in drafts}) == 1:
+                subs = _derive_subtitles(parsed, drafts, max_level=limit)
                 enriched: list[SectionDraft] = []
                 for draft in drafts:
                     enriched.append(draft)
@@ -255,9 +256,9 @@ def pack_section_chunks(
     return drafts
 
 
-def make_chunks(parsed: ParsedBook, content_start_page: int | None = None) -> tuple[list[SectionDraft], list[ChunkDraft], int]:
+def make_chunks(parsed: ParsedBook, content_start_page: int | None = None, max_level: int | None = None) -> tuple[list[SectionDraft], list[ChunkDraft], int]:
     cfg = settings.ingestion
-    sections = build_sections(parsed)
+    sections = build_sections(parsed, max_level=max_level)
     content_start_index = detect_content_start_index(sections)
     if content_start_page is not None:
         override_idx = next((i for i, s in enumerate(sections) if s.page_start == content_start_page), content_start_index)

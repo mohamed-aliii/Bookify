@@ -15,6 +15,11 @@ class BookOut(BaseModel):
     error: str | None
     content_start_section_id: int | None = None
     content_start_page: int | None = None
+    content_start_confirmed: bool = False
+    ingestion_max_level: int = 3
+    content_type: str = "book"
+    course_id: int | None = None
+    course_title: str | None = None
 
 
 class SectionOut(BaseModel):
@@ -584,3 +589,59 @@ class QuizErrorOut(BaseModel):
     correct_answer: str
     explanation: str
     created_at: datetime.datetime
+
+
+# --- Course ---
+
+class CourseCreate(BaseModel):
+    title: str
+    description: str = ""
+    book_ids: list[int] = []
+
+
+class CourseUpdate(BaseModel):
+    title: str | None = None
+    description: str | None = None
+
+
+class CourseBookOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    book_id: int
+    ord: int
+    book_title: str = ""
+    book_filename: str = ""
+    book_content_type: str = "book"
+    book_num_pages: int = 0
+    book_cover_path: str | None = None
+    book_status: str = "ready"
+
+
+class CourseOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    title: str
+    description: str
+    cover_path: str | None = None
+    created_at: datetime.datetime | None = None
+    updated_at: datetime.datetime | None = None
+    book_count: int = 0
+    books: list[CourseBookOut] = []
+
+
+class CourseBookAdd(BaseModel):
+    book_ids: list[int]
+
+
+class CourseBookOrder(BaseModel):
+    direction: Literal["up", "down"]
+
+
+class CourseProgress(BaseModel):
+    book_count: int
+    total_cards: int
+    cards_due: int
+    cards_mastered: int
+    sections_read: int
+    total_sections: int
+    books_progress: list[DashboardBook]

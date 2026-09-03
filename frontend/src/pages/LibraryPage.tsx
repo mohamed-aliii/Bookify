@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { api } from '../api'
-import type { Book, Dashboard, SearchHit } from '../types'
+import type { Book, Course, Dashboard, SearchHit } from '../types'
 import AppShell from '../components/AppShell'
+import ContentStartPicker from '../components/ContentStartPicker'
 import { SkeletonCard } from '../components/ui/Skeleton'
 import EmptyState, { EmptyStateIcon, EmptyStateTitle, EmptyStateDescription } from '../components/ui/EmptyState'
 
@@ -38,6 +39,9 @@ export default function LibraryPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null)
   const [reindexingId, setReindexingId] = useState<number | null>(null)
   const [failedCovers, setFailedCovers] = useState<Set<number>>(() => new Set())
+  const [firstChapterBookId, setFirstChapterBookId] = useState<number | null>(null)
+  const [courses, setCourses] = useState<Course[]>([])
+  const [addToCourseBookId, setAddToCourseBookId] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const navigate = useNavigate()
@@ -66,9 +70,10 @@ export default function LibraryPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [bks, dash] = await Promise.all([api.listBooks(), api.getDashboard()])
+      const [bks, dash, c] = await Promise.all([api.listBooks(), api.getDashboard(), api.listCourses()])
       setBooks(bks)
       setDashboard(dash)
+      setCourses(c)
       setError(null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
@@ -84,6 +89,26 @@ export default function LibraryPage() {
     const timer = setInterval(() => void refresh(), 2500)
     return () => clearInterval(timer)
   }, [books, refresh])
+
+  // Auto-open first-chapter picker when a book finishes indexing and needs selection.
+  // Slides auto-confirm, so exclude them from this flow.
+  const prevBooksRef = useRef<Book[]>([])
+  useEffect(() => {
+    const prev = prevBooksRef.current
+    // If any book just became ready and is not confirmed, pop the picker.
+    const newlyReady = books.filter((b) => b.status === 'ready' && !b.content_start_confirmed && (b.content_type ?? 'book') !== 'slides')
+    const prevPendingIds = new Set(prev.filter((p) => p.status === 'pending').map((p) => p.id))
+    const justFinished = newlyReady.find((b) => prevPendingIds.has(b.id))
+    if (justFinished && firstChapterBookId === null) {
+      setFirstChapterBookId(justFinished.id)
+    } else if (newlyReady.length > 0 && firstChapterBookId === null && prev.length === 0 && !loading) {
+      // On initial load, if there are unconfirmed ready books, show for the most recent.
+      setFirstChapterBookId(newlyReady[0].id)
+    }
+    prevBooksRef.current = books
+  }, [books, loading, firstChapterBookId])
+
+  const needsSelection = books.filter((b) => b.status === 'ready' && !b.content_start_confirmed && (b.content_type ?? 'book') !== 'slides')
 
   const onPickFile = async (file: File | undefined | null) => {
     if (!file) return
@@ -103,6 +128,15 @@ export default function LibraryPage() {
     setReindexingId(id); setError(null)
     try { await api.reindexBook(id); await refresh() } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     finally { setReindexingId(null) }
+  }
+
+  const addBookToCourse = async (courseId: number) => {
+    if (!addToCourseBookId) return
+    try {
+      await api.addBooksToCourse(courseId, [addToCourseBookId])
+      setAddToCourseBookId(null)
+      await refresh()
+    } catch (e) { console.error(e) }
   }
 
   const readyCount = books.filter((b) => b.status === 'ready').length
@@ -155,22 +189,40 @@ export default function LibraryPage() {
     </div>
   )
 
-  const headerActions = (
-    <div className="flex items-center gap-2">
-      <button onClick={() => fileRef.current?.click()} disabled={uploading} className="btn-primary btn-sm">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
-          <path d="M12 5v14M5 12h14" strokeLinecap="round"/>
-        </svg>
-        {uploading ? 'Uploading…' : 'Add Book'}
-      </button>
-    </div>
-  )
-
   return (
-    <AppShell header={<>{searchHeader}{headerActions}</>}>
+    <AppShell header={searchHeader}>
       <div className="page-container">
         {error && (
           <div className="mb-6 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">{error}</div>
+        )}
+
+        {needsSelection.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-amber-500/30 bg-amber-500/10 px-5 py-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-200">
+                  {needsSelection.length} book{needsSelection.length === 1 ? '' : 's'} need first-chapter confirmation
+                </p>
+                <p className="mt-1 text-xs text-amber-200/70">
+                  Pick where the real content starts — front matter will be ignored in search & study.
+                </p>
+                <ul className="mt-2 list-disc pl-4 text-xs text-amber-100/80">
+                  {needsSelection.slice(0, 3).map((b) => (
+                    <li key={b.id} className="truncate">
+                      {b.title}
+                    </li>
+                  ))}
+                  {needsSelection.length > 3 && <li>+{needsSelection.length - 3} more</li>}
+                </ul>
+              </div>
+              <button
+                onClick={() => setFirstChapterBookId(needsSelection[0].id)}
+                className="shrink-0 rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-black transition hover:bg-amber-400"
+              >
+                Select first chapter
+              </button>
+            </div>
+          </div>
         )}
 
         {topDue && (
@@ -223,8 +275,8 @@ export default function LibraryPage() {
                   <path d="M12 16V4m0 0L8 8m4-4l4 4M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2" strokeLinecap="round" strokeLinejoin="round"/>
                 </svg>
               </EmptyStateIcon>
-              <EmptyStateTitle>Drop a PDF to get started</EmptyStateTitle>
-              <EmptyStateDescription>Your book will be parsed into sections, indexed, and ready for conversation.</EmptyStateDescription>
+              <EmptyStateTitle>{uploading ? 'Uploading and indexing…' : 'Drop a PDF or PPTX to get started'}</EmptyStateTitle>
+              <EmptyStateDescription>Your book or series slides will be parsed into sections, indexed, and ready for conversation.</EmptyStateDescription>
             </EmptyState>
           </div>
         ) : (
@@ -257,11 +309,18 @@ export default function LibraryPage() {
                         <div className="flex min-w-0 flex-1 flex-col justify-center">
                           <p className="line-clamp-3 font-semibold leading-snug text-slate-100">{book.title}</p>
                           <p className="mt-1.5 truncate text-2xs text-slate-500" title={book.filename}>{book.filename}</p>
-                          <div className="mt-3 flex items-center gap-2">
+                          <div className="mt-3 flex flex-wrap items-center gap-2">
                             <span className={`${STATUS_STYLES[book.status] ?? 'badge-neutral'}`}>
                               {book.status === 'pending' ? 'Indexing…' : book.status}
                             </span>
-                            {book.num_pages > 0 && <span className="text-2xs text-slate-600">{book.num_pages} pages</span>}
+                            {book.content_type === 'slides' && <span className="badge-indigo text-2xs">Slides</span>}
+                            {book.content_type === 'slides' && book.filename.toLowerCase().endsWith('.pptx') && <span className="badge-neutral text-2xs">PPTX</span>}
+                            {book.status === 'ready' && !book.content_start_confirmed && book.content_type !== 'slides' && (
+                              <span className="badge-warning text-2xs" title="Pick first chapter to finish setup">
+                                Needs first chapter
+                              </span>
+                            )}
+                            {book.num_pages > 0 && <span className="text-2xs text-slate-600">{book.num_pages} {book.content_type === 'slides' ? 'slides' : 'pages'}</span>}
                           </div>
                         </div>
                       </div>
@@ -300,6 +359,15 @@ export default function LibraryPage() {
                           Open →
                         </span>
                         <div className="flex items-center gap-1">
+                          {book.status === 'ready' && !book.content_start_confirmed && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setFirstChapterBookId(book.id) }}
+                              title="Select first chapter"
+                              className="pointer-events-auto rounded-full bg-amber-500 px-2.5 py-1 text-2xs font-semibold text-black hover:bg-amber-400"
+                            >
+                              Select chapter
+                            </button>
+                          )}
                           {book.status !== 'pending' && (
                             <button
                               onClick={(e) => { e.stopPropagation(); void reindexBook(book.id) }}
@@ -322,6 +390,33 @@ export default function LibraryPage() {
                               <path d="M4 7h16M10 11v6m4-6v6M6 7l1 12a2 2 0 002 2h6a2 2 0 002-2l1-12M9 7V5a2 2 0 012-2h2a2 2 0 012 2v2" strokeLinecap="round" strokeLinejoin="round"/>
                             </svg>
                           </button>
+                          <div className="relative">
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setAddToCourseBookId(addToCourseBookId === book.id ? null : book.id) }}
+                              disabled={busy || courses.length === 0}
+                              title="Add to series"
+                              className="pointer-events-auto btn-icon !p-1.5"
+                            >
+                              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5">
+                                <path d="M2 3h6a4 4 0 014 4v14a3 3 0 00-3-3H2z" strokeLinecap="round" strokeLinejoin="round"/>
+                                <path d="M22 3h-6a4 4 0 00-4 4v14a3 3 0 013-3h7z" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            </button>
+                            {addToCourseBookId === book.id && courses.length > 0 && (
+                              <div className="absolute right-0 bottom-full mb-1 z-30 w-48 rounded-xl border border-white/[0.08] bg-surface-2 p-1 shadow-glass" onClick={e => e.stopPropagation()}>
+                                <p className="px-2 py-1 text-[10px] text-slate-500">Add to series</p>
+                                {courses.map(c => (
+                                  <button
+                                    key={c.id}
+                                    onClick={() => addBookToCourse(c.id)}
+                                    className="w-full truncate rounded-lg px-2 py-1.5 text-left text-xs text-slate-300 hover:bg-white/[0.06]"
+                                  >
+                                    {c.title}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       </div>
 
@@ -353,13 +448,38 @@ export default function LibraryPage() {
                   dragging ? 'border-indigo-400 bg-indigo-500/[0.06]' : 'border-slate-700/40 hover:border-slate-600 hover:bg-white/[0.01]'
                 }`}
               >
-                <p className="text-xs text-slate-500">Drop another PDF or click to browse</p>
+                <p className="text-xs text-slate-500">Drop another PDF or PPTX or click to browse</p>
               </div>
             </div>
           </>
         )}
 
-        <input ref={fileRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(e) => void onPickFile(e.target.files?.[0])} />
+        <input ref={fileRef} type="file" accept="application/pdf,.pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,.pptx" className="hidden" onChange={(e) => void onPickFile(e.target.files?.[0])} />
+
+        {firstChapterBookId !== null && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setFirstChapterBookId(null)}>
+            <div className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+              <div className="mb-3 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-white">
+                  Select first chapter — {books.find((b) => b.id === firstChapterBookId)?.title ?? `Book #${firstChapterBookId}`}
+                </h2>
+                <button onClick={() => setFirstChapterBookId(null)} className="rounded-full bg-white/10 px-2 py-1 text-xs text-white hover:bg-white/20">
+                  ✕
+                </button>
+              </div>
+              <ContentStartPicker
+                bookId={firstChapterBookId}
+                onConfirmed={() => {
+                  void refresh()
+                }}
+                onClose={() => setFirstChapterBookId(null)}
+              />
+              <p className="mt-3 text-center text-2xs text-slate-400">
+                You can also change this later in the book’s Study → First chapter panel.
+              </p>
+            </div>
+          </div>
+        )}
       </div>
     </AppShell>
   )

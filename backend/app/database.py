@@ -86,6 +86,19 @@ def init_db() -> None:
             conn.execute(text("ALTER TABLE books ADD COLUMN content_start_section_id INTEGER REFERENCES sections(id)"))
         if "content_start_page" not in bcolumns:
             conn.execute(text("ALTER TABLE books ADD COLUMN content_start_page INTEGER"))
+        if "content_start_confirmed" not in bcolumns:
+            conn.execute(text("ALTER TABLE books ADD COLUMN content_start_confirmed BOOLEAN NOT NULL DEFAULT 0"))
+            # Backfill existing ready books as confirmed so they don't block.
+            conn.execute(text("UPDATE books SET content_start_confirmed = 1 WHERE status = 'ready'"))
+        if "ingestion_max_level" not in bcolumns:
+            conn.execute(text("ALTER TABLE books ADD COLUMN ingestion_max_level INTEGER NOT NULL DEFAULT 3"))
+        else:
+            # Auto-upgrade existing L2 books to L2+L3 on next restart (user request)
+            # Only upgrade books that are ready and were at default 2
+            conn.execute(text("UPDATE books SET ingestion_max_level=3 WHERE ingestion_max_level=2"))
+        if "content_type" not in bcolumns:
+            conn.execute(text("ALTER TABLE books ADD COLUMN content_type VARCHAR(20) NOT NULL DEFAULT 'book'"))
+            conn.execute(text("UPDATE books SET content_type='book' WHERE content_type IS NULL OR content_type=''"))
 
         ncolumns = {row[1] for row in conn.execute(text("PRAGMA table_info(notebook_cells)"))}
         if "cell_type" not in ncolumns:

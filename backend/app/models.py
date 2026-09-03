@@ -1,6 +1,6 @@
 import datetime as dt
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -23,6 +23,9 @@ class Book(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     content_start_section_id: Mapped[int | None] = mapped_column(ForeignKey("sections.id"), nullable=True)
     content_start_page: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    content_start_confirmed: Mapped[bool] = mapped_column(Boolean, default=False)
+    ingestion_max_level: Mapped[int] = mapped_column(Integer, default=3)
+    content_type: Mapped[str] = mapped_column(String(20), default="book")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     sections: Mapped[list["Section"]] = relationship(
@@ -418,4 +421,34 @@ class ConceptClusterMember(Base):
 
     cluster: Mapped[ConceptCluster] = relationship(back_populates="members")
     knowledge_point: Mapped[KnowledgePoint] = relationship()
+    book: Mapped[Book] = relationship()
+
+
+class Course(Base):
+    __tablename__ = "courses"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    title: Mapped[str] = mapped_column(String(400))
+    description: Mapped[str] = mapped_column(Text, default="")
+    cover_path: Mapped[str | None] = mapped_column(String(600), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    books: Mapped[list["CourseBook"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan", order_by="CourseBook.ord"
+    )
+
+
+class CourseBook(Base):
+    __tablename__ = "course_books"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"))
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"))
+    ord: Mapped[int] = mapped_column(Integer, default=0)
+    added_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("course_id", "book_id", name="uq_course_book"),)
+
+    course: Mapped[Course] = relationship(back_populates="books")
     book: Mapped[Book] = relationship()

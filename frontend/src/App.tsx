@@ -7,6 +7,8 @@ const BookPage = lazy(() => import('./pages/BookPage'))
 const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 const StatsPage = lazy(() => import('./pages/StatsPage'))
 const KnowledgeMapPage = lazy(() => import('./pages/KnowledgeMapPage'))
+const CourseListPage = lazy(() => import('./pages/CourseListPage'))
+const CoursePage = lazy(() => import('./pages/CoursePage'))
 
 function PageLoader() {
   return (
@@ -26,6 +28,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<LibraryPage />} />
           <Route path="/books/:bookId" element={<BookPage />} />
+          <Route path="/courses" element={<CourseListPage />} />
+          <Route path="/courses/:courseId" element={<CoursePage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/stats" element={<StatsPage />} />
           <Route path="/knowledge-map" element={<KnowledgeMapPage />} />

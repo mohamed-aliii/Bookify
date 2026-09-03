@@ -9,12 +9,21 @@ export interface Book {
   error: string | null
   content_start_section_id: number | null
   content_start_page: number | null
+  content_start_confirmed: boolean
+  ingestion_max_level: number
+  content_type: 'book' | 'slides'
+  course_id?: number | null
+  course_title?: string | null
 }
 
 export interface ContentStartInfo {
   content_start_section_id: number | null
   content_start_page: number | null
+  content_start_confirmed: boolean
+  needs_selection: boolean
   first_section_title: string | null
+  ingestion_max_level: number
+  available_max_level: number
   sections: Section[]
 }
 
@@ -516,4 +525,52 @@ export interface SectionChatRequest {
   action: string
   page?: number | null
   question?: string | null
+}
+
+export interface CourseBook {
+  id: number
+  book_id: number
+  ord: number
+  book_title: string
+  book_filename: string
+  book_content_type: 'book' | 'slides'
+  book_num_pages: number
+  book_cover_path: string | null
+  book_status: string
+}
+
+export interface Course {
+  id: number
+  title: string
+  description: string
+  cover_path: string | null
+  created_at: string | null
+  updated_at: string | null
+  book_count: number
+  books: CourseBook[]
+}
+
+export interface CourseProgress {
+  book_count: number
+  total_cards: number
+  cards_due: number
+  cards_mastered: number
+  sections_read: number
+  total_sections: number
+  books_progress: DashboardBook[]
+}
+
+export interface CourseDueCard {
+  id: number
+  section_id: number
+  front: string
+  back: string
+  ord: number
+  ease: number
+  interval_days: number
+  due_at: string | null
+  reps: number
+  lapses: number
+  book_title: string
+  section_title: string
 }

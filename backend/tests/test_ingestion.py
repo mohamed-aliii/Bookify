@@ -38,7 +38,8 @@ def test_parse_detects_structure(tmp_path):
 
 def test_chunks_respect_sections_and_keep_code(tmp_path):
     parsed = parse_pdf(_sample_pdf(tmp_path, with_toc=True))
-    sections, chunks = make_chunks(parsed)
+    result = make_chunks(parsed)
+    sections, chunks = result[0], result[1]
     assert [s.title for s in sections] == ["Chapter One: Vectors", "Chapter Two: Matrices"]
     assert chunks
     assert all(c.page_start >= 1 for c in chunks)
@@ -51,6 +52,7 @@ def test_fallback_headings_without_toc(tmp_path):
     path = _sample_pdf(tmp_path, with_toc=False)
     parsed = parse_pdf(path)
     assert parsed.toc == []
-    sections, chunks = make_chunks(parsed)
+    result = make_chunks(parsed)
+    sections, chunks = result[0], result[1]
     assert sections[0].title == "Chapter One: Vectors"
     assert any(c.section_title == "Chapter Two: Matrices" for c in chunks)

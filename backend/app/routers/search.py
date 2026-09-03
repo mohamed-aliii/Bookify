@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from ..database import get_db
 from ..embeddings import embedding_client
 from ..llm import llm_client
-from ..models import Book, Section
+from ..models import Book, CourseBook, Section
 from ..schemas import SearchHit
 from ..vectorstore import RetrievedChunk, get_vector_store
 
@@ -113,6 +113,8 @@ def _fuse_and_rank(
         book = db.get(Book, hit.book_id)
         if book is None or book.status != "ready":
             continue
+        if db.scalar(select(CourseBook.id).where(CourseBook.book_id == book.id).limit(1)):
+            continue
         sid = section_meta[agg_key][0]
         results.append(
             SearchHit(
@@ -149,6 +151,8 @@ def search_library(
         for hit in hits:
             book = db.get(Book, hit.book_id)
             if book is None or book.status != "ready":
+                continue
+            if db.scalar(select(CourseBook.id).where(CourseBook.book_id == book.id).limit(1)):
                 continue
             results.append(
                 SearchHit(

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
-import { api, streamSummary, getContentStart, setContentStart } from '../api'
-import type { BookProgress, ContentStartInfo, Flashcard, Quiz, QuizGradeResult, ReviewRating, Section } from '../types'
+import { api, streamSummary } from '../api'
+import type { BookProgress, Flashcard, Quiz, QuizGradeResult, ReviewRating, Section } from '../types'
 import Markdown from './Markdown'
 import SocraticChat from './SocraticChat'
 import TeachBack from './TeachBack'
@@ -11,6 +11,7 @@ import StudySessionView from './StudySessionView'
 import ConceptGraphView from './ConceptGraph'
 import Notebook from './Notebook'
 import RelatedSections from './RelatedSections'
+import ContentStartPicker from './ContentStartPicker'
 
 type Mode = 'summary' | 'cards' | 'review' | 'quiz' | 'socratic' | 'practice' | 'teachback' | 'understand' | 'weakness' | 'session' | 'graph' | 'playground'
 
@@ -134,12 +135,14 @@ export default function StudyView({
   activeSectionId,
   onSelectSection,
   notebookFocus,
+  onContentStartConfirmed,
 }: {
   bookId: number
   sections: Section[]
   activeSectionId: number | null
   onSelectSection: (id: number) => void
   notebookFocus?: { seq: number; cellId: number; sectionId: number | null } | null
+  onContentStartConfirmed?: () => void
 }) {
   const [mode, setMode] = useState<Mode>('summary')
 
@@ -180,37 +183,9 @@ export default function StudyView({
   const [reviewBusy, setReviewBusy] = useState(false)
 
   const [csOpen, setCsOpen] = useState(false)
-  const [csInfo, setCsInfo] = useState<ContentStartInfo | null>(null)
-  const [csBusy, setCsBusy] = useState(false)
-  const [csError, setCsError] = useState<string | null>(null)
-  const [csSaved, setCsSaved] = useState(false)
 
-  const toggleContentStart = async () => {
-    if (csOpen) {
-      setCsOpen(false)
-      return
-    }
-    setCsError(null)
-    setCsSaved(false)
-    try {
-      setCsInfo(await getContentStart(bookId))
-      setCsOpen(true)
-    } catch (e) {
-      setCsError(e instanceof Error ? e.message : String(e))
-    }
-  }
-
-  const applyContentStart = async (page: number | null) => {
-    setCsBusy(true)
-    setCsError(null)
-    try {
-      await setContentStart(bookId, page)
-      setCsSaved(true)
-    } catch (e) {
-      setCsError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setCsBusy(false)
-    }
+  const toggleContentStart = () => {
+    setCsOpen((o) => !o)
   }
 
   const section = sections.find((s) => s.id === activeSectionId) ?? null
@@ -370,13 +345,19 @@ export default function StudyView({
           onChange={(e) => onSelectSection(Number(e.target.value))}
           className="input max-w-[280px] min-w-0 flex-1 sm:flex-none truncate"
         >
-          {sections.map((s) => (
-            <option key={s.id} value={s.id}>
-              {'\u00A0'.repeat(((s.level ?? 1) - 1) * 4)}
-              {(s.level ?? 1) > 1 ? '› ' : ''}
-              {s.title} (p. {s.page_start})
-            </option>
-          ))}
+          {sections.map((s, idx) => {
+            const isLast = idx === sections.length - 1
+            const pageCount = s.page_end && s.page_end > s.page_start ? (isLast ? s.page_end - s.page_start + 1 : s.page_end - s.page_start) : 1
+            const displayEnd = s.page_end && s.page_end > s.page_start ? (isLast ? s.page_end : s.page_end - 1) : s.page_start
+            const range = displayEnd !== s.page_start ? `p. ${s.page_start}–${displayEnd}` : `p. ${s.page_start}`
+            return (
+              <option key={s.id} value={s.id}>
+                {'\u00A0'.repeat(((s.level ?? 1) - 1) * 4)}
+                {(s.level ?? 1) > 1 ? '› ' : ''}
+                {s.title} • {pageCount} p. • {range}
+              </option>
+            )
+          })}
         </select>
         <button
           onClick={toggleContentStart}
@@ -407,60 +388,15 @@ export default function StudyView({
 
       {csOpen && (
         <div className="shrink-0 border-b border-white/[0.06] bg-white/[0.015] px-5 py-3">
-          <div className="mb-2 flex flex-wrap items-center gap-3">
-            <span className="text-xs font-semibold text-slate-200">First chapter (front matter is ignored)</span>
-            {csInfo?.first_section_title && (
-              <span className="text-xs text-slate-500">current: {csInfo.first_section_title}</span>
-            )}
-            <div className="ml-auto flex items-center gap-2">
-              <button
-                onClick={() => applyContentStart(null)}
-                disabled={csBusy}
-                className="rounded-md border border-white/[0.08] px-2.5 py-1 text-xs text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white disabled:opacity-50"
-              >
-                Auto (detect)
-              </button>
-              <button
-                onClick={() => setCsOpen(false)}
-                className="rounded-md px-2.5 py-1 text-xs text-slate-500 hover:text-slate-300"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-          {csSaved && (
-            <div className="mb-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-300">
-              First chapter updated — book is reindexing. Reload to see the rebuilt section list.
-            </div>
-          )}
-          {csError && (
-            <div className="mb-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">{csError}</div>
-          )}
-          <div className="max-h-64 overflow-y-auto rounded-lg border border-white/[0.06]">
-            {csInfo && (csInfo.sections.length === 0 ? (
-              <div className="px-3 py-4 text-center text-xs text-slate-500">No sections yet — the book must be indexed first.</div>
-            ) : csInfo.sections.map((s) => (
-              <div
-                key={s.id}
-                className={`flex items-center justify-between gap-3 border-b border-white/[0.04] px-3 py-2 text-xs last:border-0 ${
-                  s.id === csInfo.content_start_section_id ? 'bg-indigo-500/10' : ''
-                }`}
-              >
-                <span className="truncate text-slate-300">
-                  {'\u00A0'.repeat(((s.level ?? 1) - 1) * 4)}
-                  {(s.level ?? 1) > 1 ? '› ' : ''}
-                  {s.title} <span className="text-slate-600">(p. {s.page_start})</span>
-                </span>
-                <button
-                  onClick={() => applyContentStart(s.page_start)}
-                  disabled={csBusy}
-                  className="shrink-0 rounded-md border border-white/[0.08] px-2.5 py-1 text-xs text-slate-300 transition-colors hover:bg-indigo-500/20 hover:text-white disabled:opacity-50"
-                >
-                  {s.id === csInfo.content_start_section_id ? 'Current' : 'Set as first'}
-                </button>
-              </div>
-            )))}
-          </div>
+          <ContentStartPicker
+            bookId={bookId}
+            onClose={() => setCsOpen(false)}
+            onConfirmed={() => {
+              void loadCards()
+              void loadProgress()
+              onContentStartConfirmed?.()
+            }}
+          />
         </div>
       )}
 

@@ -145,6 +145,16 @@ def _extract_json_array(text: str) -> list[dict]:
     return items
 
 
+@router.get("/books/{book_id}/sections/{section_id}/summary")
+def get_summary(section_id: int, book_id: int, db: Session = Depends(get_db)):
+    _load_book(db, book_id)
+    section = _load_book_section(db, book_id, section_id)
+    cached = db.scalar(select(SectionSummary).where(SectionSummary.section_id == section.id))
+    if cached is not None:
+        return {"cached": True, "content": cached.content}
+    return {"cached": False, "content": None}
+
+
 @router.post("/books/{book_id}/sections/{section_id}/summary")
 def summarize_section(section_id: int, book_id: int, body: SummaryRequest, db: Session = Depends(get_db)):
     _load_book(db, book_id)

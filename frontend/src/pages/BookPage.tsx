@@ -10,6 +10,7 @@ import CodeLibraryPanel from '../components/CodeLibraryPanel'
 import RecallPrompt from '../components/RecallPrompt'
 import GamificationBar from '../components/GamificationBar'
 import ReadView from '../components/ReadView'
+import ContentStartPicker from '../components/ContentStartPicker'
 import usePaneWidth from '../hooks/usePaneWidth'
 import type { Book, ChatSession, Citation, Message, ReadingProgress, Section } from '../types'
 
@@ -71,6 +72,7 @@ export default function BookPage() {
   const [dueCardsCount, setDueCardsCount] = useState(0)
   const [readTargetPage, setReadTargetPage] = useState<number | null>(null)
   const [notebookFocus, setNotebookFocus] = useState<{ seq: number; cellId: number; sectionId: number | null } | null>(null)
+  const [showFirstChapterPicker, setShowFirstChapterPicker] = useState(false)
   const exportRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -87,6 +89,43 @@ export default function BookPage() {
   const reasoningStartRef = useRef<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  const refreshAll = useCallback(async () => {
+    try {
+      const [b, secs, rp, summary, due] = await Promise.all([
+        api.getBook(id),
+        api.getSections(id),
+        api.getReadingProgress(id),
+        api.getReadingSummary(id),
+        api.getDueCards(id),
+      ])
+      setBook(b)
+      setSections(secs)
+      const rpMap = new Map<number, ReadingProgress>()
+      for (const r of rp) rpMap.set(r.section_id, r)
+      setReadingProgress(rpMap)
+      setReadSummary({ sections_read: summary.sections_read, total_sections: summary.total_sections })
+      setDueCardsCount(due.length)
+      // If active study section was deleted during reindex, remap to new first chapter
+      setStudySectionId((prev) => {
+        if (prev === null) return prev
+        if (secs.some((s) => s.id === prev)) return prev
+        // Try remap by page/title via old section not available – fallback to first visible
+        const firstChapter = secs.find((s) => s.level === 1 && !s.title.toLowerCase().startsWith('front matter'))
+        return firstChapter?.id ?? secs[0]?.id ?? null
+      })
+      if (b.status === 'ready' && !b.content_start_confirmed && (b.content_type ?? 'book') !== 'slides') {
+        setShowFirstChapterPicker(true)
+      } else if (b.status === 'ready') {
+        setShowFirstChapterPicker(false)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }, [id])
+
+  // Keep lightweight refreshBook alias for older callers (now delegates to refreshAll)
+  const refreshBook = refreshAll
+
   useEffect(() => {
     void (async () => {
       try {
@@ -95,6 +134,9 @@ export default function BookPage() {
           api.getReadingProgress(id), api.getReadingSummary(id), api.getDueCards(id),
         ])
         setBook(b); setSections(secs); setSessions(sess)
+        if (b.status === 'ready' && !b.content_start_confirmed && (b.content_type ?? 'book') !== 'slides') {
+          setShowFirstChapterPicker(true)
+        }
         const rpMap = new Map<number, ReadingProgress>()
         for (const r of rp) rpMap.set(r.section_id, r)
         setReadingProgress(rpMap)
@@ -109,6 +151,35 @@ export default function BookPage() {
       } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
     })()
   }, [id])
+
+  // Poll while pending, and also detect external reindex (e.g., from LibraryPage)
+  useEffect(() => {
+    if (!book) return
+    // Always poll when pending
+    if (book.status === 'pending') {
+      const t = setInterval(() => void refreshAll(), 2500)
+      return () => clearInterval(t)
+    }
+    // When ready, still poll briefly after a reindex might have been triggered elsewhere.
+    let checks = 0
+    const t = setInterval(async () => {
+      checks += 1
+      if (checks > 8) {
+        clearInterval(t)
+        return
+      }
+      try {
+        const b = await api.getBook(id)
+        if (b.status !== book.status || b.content_start_confirmed !== book.content_start_confirmed) {
+          await refreshAll()
+          clearInterval(t)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 4000)
+    return () => clearInterval(t)
+  }, [book?.status, book?.content_start_confirmed, refreshAll, id])
 
   useEffect(() => { if (atBottomRef.current) bottomRef.current?.scrollIntoView({ behavior: 'smooth' }) }, [messages])
 
@@ -201,10 +272,17 @@ export default function BookPage() {
       {/* Sidebar */}
       <aside style={{ width: sidebarWidth }} className={`relative fixed inset-y-0 left-0 z-50 flex flex-col border-r border-white/[0.06] bg-surface-1 transition-transform duration-300 lg:static lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         <div className="flex h-14 items-center gap-2 border-b border-white/[0.06] px-4">
-          <Link to="/" className="flex items-center gap-2 text-sm text-slate-400 transition hover:text-slate-200">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            Library
-          </Link>
+          {book.course_id ? (
+            <Link to={`/courses/${book.course_id}`} className="flex items-center gap-2 text-sm text-slate-400 transition hover:text-slate-200" title={`Back to ${book.course_title || 'Course'}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              <span className="truncate max-w-[140px]">{book.course_title || 'Course'}</span>
+            </Link>
+          ) : (
+            <Link to="/" className="flex items-center gap-2 text-sm text-slate-400 transition hover:text-slate-200">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4"><path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Library
+            </Link>
+          )}
         </div>
         <div className="px-3 pt-3">
           <button onClick={() => void newChat()} disabled={streaming} className="btn-secondary w-full btn-sm">
@@ -232,6 +310,11 @@ export default function BookPage() {
               <p className="section-title mb-2 px-1">Contents</p>
               <ul className="space-y-0.5">
                 {(() => {
+                  // When backend has already filtered front matter (confirmed), trust it directly.
+                  // Otherwise fall back to client heuristic for legacy/unconfirmed books.
+                  if (book.content_start_confirmed) {
+                    return sections
+                  }
                   const l1Idxs: number[] = []
                   for (let i = 0; i < sections.length; i++) { if (sections[i].level === 1) l1Idxs.push(i) }
                   let startIdx = 0
@@ -242,22 +325,33 @@ export default function BookPage() {
                   if (startIdx === 0 && l1Idxs.length > 1) startIdx = l1Idxs[1]
                   const visible = sections.slice(startIdx)
                   return visible
-                })().map((sec) => (
-                  <li key={sec.id} title={sec.title} className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg py-1.5 pr-2 transition-colors duration-150 hover:bg-white/[0.03] ${(sec.level ?? 1) === 1 ? 'text-[13px] font-medium text-slate-300' : 'text-xs text-slate-500'}`} style={{ paddingLeft: `${8 + ((sec.level ?? 1) - 1) * 16}px` }}>
-                    <span className="flex min-w-0 flex-1 items-baseline gap-1" onClick={() => { setReadTargetPage(sec.page_start); setTab('read'); setSidebarOpen(false) }}>
-                      <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${readingProgress.has(sec.id) ? 'bg-emerald-500' : 'border border-slate-600'}`} />
-                      <span className="truncate">{(sec.level ?? 1) > 1 && <span className="mr-1 text-slate-600">›</span>}{sec.title}</span>
-                    </span>
-                    <span className="flex shrink-0 items-center gap-1.5">
-                      <span className="text-2xs text-slate-600">{sec.page_start}</span>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); void handleToggleRead(sec.id, sec.title) }}
-                        title={readingProgress.has(sec.id) ? 'Mark as unread' : 'Mark as read'}
-                        className={`h-3.5 w-3.5 rounded-full border transition-colors ${readingProgress.has(sec.id) ? 'border-emerald-500 bg-emerald-500' : 'border-slate-600 hover:border-slate-400'}`}
-                      />
-                    </span>
-                  </li>
-                ))}
+                })().map((sec) => {
+                  const isSlides = (book.content_type as string) === 'slides'
+                  const isLast = sections.length > 0 && sec.id === sections[sections.length - 1]?.id
+                  const pageCount = sec.page_end && sec.page_end > sec.page_start ? (isLast ? sec.page_end - sec.page_start + 1 : sec.page_end - sec.page_start) : 1
+                  const displayEnd = sec.page_end && sec.page_end > sec.page_start ? (isLast ? sec.page_end : sec.page_end - 1) : sec.page_start
+                  const range = isSlides
+                    ? `Slide ${sec.page_start}`
+                    : (displayEnd !== sec.page_start ? `p. ${sec.page_start}–${displayEnd}` : `p. ${sec.page_start}`)
+                  const pageLabel = isSlides ? `Slide ${sec.page_start}` : `${pageCount} p.`
+                  return (
+                    <li key={sec.id} title={`${sec.title} • ${range} • ${isSlides ? range : `${pageCount} page${pageCount !== 1 ? 's' : ''}`}`} onClick={() => { setReadTargetPage(sec.page_start); setTab('read'); setSidebarOpen(false) }} className={`flex cursor-pointer items-center justify-between gap-2 rounded-lg py-1.5 pr-2 transition-colors duration-150 hover:bg-white/[0.03] ${(sec.level ?? 1) === 1 ? 'text-[13px] font-medium text-slate-300' : 'text-xs text-slate-500'}`} style={{ paddingLeft: `${8 + ((sec.level ?? 1) - 1) * 16}px` }}>
+                      <span className="flex min-w-0 flex-1 items-baseline gap-1">
+                        <span className={`mt-1 h-1.5 w-1.5 shrink-0 rounded-full ${readingProgress.has(sec.id) ? 'bg-emerald-500' : 'border border-slate-600'}`} />
+                        <span className="truncate">{(sec.level ?? 1) > 1 && <span className="mr-1 text-slate-600">›</span>}{sec.title}</span>
+                      </span>
+                      <span className="flex shrink-0 items-center gap-1.5" title={range}>
+                        <span className="text-2xs text-slate-500">{pageLabel}</span>
+                        {!isSlides && <span className="text-2xs text-slate-600">{range}</span>}
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void handleToggleRead(sec.id, sec.title) }}
+                          title={readingProgress.has(sec.id) ? 'Mark as unread' : 'Mark as read'}
+                          className={`h-3.5 w-3.5 rounded-full border transition-colors ${readingProgress.has(sec.id) ? 'border-emerald-500 bg-emerald-500' : 'border-slate-600 hover:border-slate-400'}`}
+                        />
+                      </span>
+                    </li>
+                  )
+                })}
               </ul>
             </>
           )}
@@ -273,9 +367,12 @@ export default function BookPage() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5"><path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round"/></svg>
           </button>
           <div className="min-w-0 flex-1">
-            <h1 className="truncate text-sm font-semibold text-slate-100" title={book.title}>{book.title}</h1>
             <div className="flex items-center gap-2">
-              <p className="text-2xs text-slate-500">{book.num_pages > 0 && `${book.num_pages} pages`}{book.status !== 'ready' && ` · ${book.status}`}</p>
+              <h1 className="truncate text-sm font-semibold text-slate-100" title={book.title}>{book.title}</h1>
+              {(book.content_type as string) === 'slides' && <span className="shrink-0 rounded bg-indigo-500/20 px-1.5 py-0.5 text-2xs font-semibold uppercase text-indigo-300">Slides</span>}
+            </div>
+            <div className="flex items-center gap-2">
+              <p className="text-2xs text-slate-500">{book.num_pages > 0 && `${book.num_pages} ${(book.content_type as string) === 'slides' ? 'slides' : 'pages'}`}{book.status !== 'ready' && ` · ${book.status}`}</p>
               {readSummary && readSummary.total_sections > 0 && (
                 <span className="text-2xs text-emerald-400">{readSummary.sections_read}/{readSummary.total_sections} read</span>
               )}
@@ -323,6 +420,39 @@ export default function BookPage() {
         </header>
 
         <GamificationBar />
+
+        {book.status === 'ready' && !book.content_start_confirmed && (book.content_type as string) !== 'slides' && (
+          <div className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-5 py-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-200">Select the first chapter to finish setup</p>
+                <p className="mt-0.5 text-xs text-amber-200/70">
+                  This book is indexed but front matter is still included. Pick the real first chapter below.
+                </p>
+              </div>
+              <button
+                onClick={() => setShowFirstChapterPicker(true)}
+                className="rounded-xl bg-amber-500 px-4 py-2 text-sm font-semibold text-black hover:bg-amber-400"
+              >
+                Choose first chapter
+              </button>
+            </div>
+          </div>
+        )}
+
+        {showFirstChapterPicker && book && (
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onClick={() => setShowFirstChapterPicker(false)}>
+            <div className="w-full max-w-2xl max-h-[85vh] overflow-hidden rounded-2xl bg-surface-1 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+              <ContentStartPicker
+                bookId={id}
+                onConfirmed={() => {
+                  void refreshBook()
+                }}
+                onClose={() => setShowFirstChapterPicker(false)}
+              />
+            </div>
+          </div>
+        )}
 
         {showRecall && (
           <div className="shrink-0 border-b border-white/[0.06] px-5 py-3">
@@ -437,6 +567,7 @@ export default function BookPage() {
             sections={sections}
             jumpToPage={readTargetPage}
             onJumpComplete={() => setReadTargetPage(null)}
+            contentType={(book.content_type as 'book' | 'slides' | undefined) ?? 'book'}
             onOpenNotebook={(cellId, sectionId) => {
               if (sectionId != null) setStudySectionId(sectionId)
               setNotebookFocus((prev) => ({ seq: (prev?.seq ?? 0) + 1, cellId, sectionId: sectionId ?? null }))
@@ -444,7 +575,14 @@ export default function BookPage() {
             }}
           />
         ) : tab === 'study' ? (
-          <StudyView bookId={id} sections={sections} activeSectionId={studySectionId} onSelectSection={(sid) => setStudySectionId(sid)} notebookFocus={notebookFocus} />
+          <StudyView
+            bookId={id}
+            sections={sections}
+            activeSectionId={studySectionId}
+            onSelectSection={(sid) => setStudySectionId(sid)}
+            notebookFocus={notebookFocus}
+            onContentStartConfirmed={() => void refreshAll()}
+          />
         ) : tab === 'progress' ? (
           <ProgressTab bookId={id} />
         ) : tab === 'vocab' ? (
