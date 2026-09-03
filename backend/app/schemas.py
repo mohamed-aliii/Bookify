@@ -1,6 +1,7 @@
 import datetime
 from typing import Literal
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, ConfigDict, field_validator
 
 

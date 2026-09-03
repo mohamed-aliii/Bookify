@@ -40,30 +40,22 @@ def _usable_title(value: str) -> bool:
     return 3 < len(value) < 150
 
 
-def _dominant_font_size(doc) -> float:
-    weights: dict[float, float] = {}
-    for page in doc:
-        for block in page.get_text("dict")["blocks"]:
-            if block.get("type") != 0:
-                continue
-            for line in block.get("lines", []):
-                for span in line.get("spans", []):
-                    size = round(span["size"], 1)
-                    weights[size] = weights.get(size, 0.0) + max(len(span["text"].strip()), 1)
-    if not weights:
-        return 11.0
-    return max(weights.items(), key=lambda kv: kv[1])[0]
-
-
 def _is_code_font(fonts: set[str]) -> bool:
     joined = " ".join(fonts).lower()
     return any(hint in joined for hint in CODE_FONT_HINTS)
 
 
-def extract_blocks(doc, body_size: float, min_heading_ratio: float) -> list[PageBlock]:
-    blocks_out: list[PageBlock] = []
+def extract_blocks_and_body_size(
+    doc,
+    min_heading_ratio: float = 1.15,
+) -> tuple[list[PageBlock], float]:
+    raw_blocks: list[tuple[int, str, set[str], list[float]]] = []
+    font_weights: dict[float, float] = {}
+    flags = fitz.TEXTFLAGS_TEXT
+
     for pno, page in enumerate(doc, start=1):
-        for block in page.get_text("dict")["blocks"]:
+        d = page.get_text("dict", flags=flags)
+        for block in d.get("blocks", []):
             if block.get("type") != 0:
                 continue
             text_lines: list[str] = []
@@ -76,21 +68,39 @@ def extract_blocks(doc, body_size: float, min_heading_ratio: float) -> list[Page
                 text_lines.append(line_text)
                 for span in line.get("spans", []):
                     fonts.add(span.get("font", ""))
-                    sizes.append(round(span.get("size", body_size), 1))
+                    sz = round(span.get("size", 11.0), 1)
+                    sizes.append(sz)
+                    font_weights[sz] = font_weights.get(sz, 0.0) + max(len(span.get("text", "").strip()), 1)
             text = "\n".join(text_lines).strip()
             if not text:
                 continue
             if len(text) <= 5 and text.replace(".", "").isdigit():
                 continue
-            dom_size = max(set(sizes), key=sizes.count) if sizes else body_size
-            if _is_code_font(fonts):
-                kind = "code"
-            elif dom_size >= body_size * min_heading_ratio and len(text) <= HEADING_MAX_CHARS:
-                kind = "heading"
-            else:
-                kind = "body"
-            blocks_out.append(PageBlock(page=pno, text=text, kind=kind, size=dom_size))
-    return blocks_out
+            raw_blocks.append((pno, text, fonts, sizes))
+
+    body_size = max(font_weights.items(), key=lambda kv: kv[1])[0] if font_weights else 11.0
+
+    blocks_out: list[PageBlock] = []
+    for pno, text, fonts, sizes in raw_blocks:
+        dom_size = max(set(sizes), key=sizes.count) if sizes else body_size
+        if _is_code_font(fonts):
+            kind = "code"
+        elif dom_size >= body_size * min_heading_ratio and len(text) <= HEADING_MAX_CHARS:
+            kind = "heading"
+        else:
+            kind = "body"
+        blocks_out.append(PageBlock(page=pno, text=text, kind=kind, size=dom_size))
+    return blocks_out, body_size
+
+
+def _dominant_font_size(doc) -> float:
+    _, body_size = extract_blocks_and_body_size(doc)
+    return body_size
+
+
+def extract_blocks(doc, body_size: float, min_heading_ratio: float) -> list[PageBlock]:
+    blocks, _ = extract_blocks_and_body_size(doc, min_heading_ratio)
+    return blocks
 
 
 def parse_pdf(
@@ -122,8 +132,7 @@ def parse_pdf(
         if _usable_title(stem_clean) and not is_hashlike_title(stem_clean):
             candidates.append(stem_clean)
 
-        body_size = _dominant_font_size(doc)
-        blocks = extract_blocks(doc, body_size, min_heading_ratio)
+        blocks, _ = extract_blocks_and_body_size(doc, min_heading_ratio)
         return ParsedBook(title=candidates[0] if candidates else "Untitled book", num_pages=num_pages, toc=toc, blocks=blocks)
     finally:
         doc.close()

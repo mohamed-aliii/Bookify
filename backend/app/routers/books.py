@@ -172,6 +172,7 @@ async def upload_book(
                     num_pages = doc.page_count
             except Exception:
                 pass
+        viewer_path = str(dest_pdf) if pdf_ready else str(dest_pptx)
         book = Book(
             title=Path(file.filename).stem,
             filename=file.filename,

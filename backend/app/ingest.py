@@ -449,11 +449,13 @@ def ingest_book(book_id: int) -> None:
         store = get_vector_store()
         total = len(chunk_drafts)
         done = 0
-        for start, batch_embeddings in embedding_client.embed_batches([d.text for d in chunk_drafts]):
+        texts = [d.text for d in chunk_drafts]
+        for start, batch_embeddings in embedding_client.embed_batches(texts):
+            end = start + len(batch_embeddings)
             store.add(
-                [d.text for d in chunk_drafts][start : start + len(batch_embeddings)],
+                texts[start:end],
                 batch_embeddings,
-                metas[start : start + len(batch_embeddings)],
+                metas[start:end],
             )
             done += len(batch_embeddings)
             logger.info("Embedded %d/%d chunks for book %d", done, total, book.id)
@@ -474,12 +476,16 @@ def ingest_book(book_id: int) -> None:
         db.commit()
         logger.info("Book %d ingested: %d sections, %d chunks (confirmed=%s)", book.id, len(sections), total, book.content_start_confirmed)
 
-        try:
-            from .routers.crossbook import extract_cross_book_links
-            result = extract_cross_book_links(db=db)
-            logger.info("Cross-book extraction after book %d: %s", book.id, result)
-        except Exception:
-            logger.debug("Cross-book extraction skipped after book %d", book.id)
+        # Cross-book extraction (skip for course slide batches to keep ingestion blazing fast)
+        from .models import CourseBook as _CourseBook
+        is_course_book = db.scalar(select(_CourseBook.id).where(_CourseBook.book_id == book.id).limit(1)) is not None
+        if not is_course_book:
+            try:
+                from .routers.crossbook import extract_cross_book_links
+                result = extract_cross_book_links(db=db)
+                logger.info("Cross-book extraction after book %d: %s", book.id, result)
+            except Exception:
+                logger.debug("Cross-book extraction skipped after book %d", book.id)
 
         # Lazy code extraction: skip auto extraction on ingest to save free-tier quota.
         # Code blocks will be extracted on demand when user opens the Code tab.
