@@ -663,9 +663,36 @@ export async function getCrossBookClusters() {
   return await res.json()
 }
 
-export async function getUnifiedGraph() {
-  const res = await authFetch('/api/cross-book/unified-graph')
+export async function getUnifiedGraph(params?: { courseId?: number; bookId?: number }) {
+  const sp = new URLSearchParams()
+  if (params?.courseId) sp.set('course_id', String(params.courseId))
+  if (params?.bookId) sp.set('book_id', String(params.bookId))
+  const qs = sp.toString() ? `?${sp.toString()}` : ''
+  const res = await authFetch(`/api/cross-book/unified-graph${qs}`)
   if (!res.ok) throw new Error('Failed to fetch unified graph')
+  return await res.json()
+}
+
+export async function getConcepts(q?: string, courseId?: number, bookId?: number) {
+  const sp = new URLSearchParams()
+  if (q) sp.set('q', q)
+  if (courseId) sp.set('course_id', String(courseId))
+  if (bookId) sp.set('book_id', String(bookId))
+  const qs = sp.toString() ? `?${sp.toString()}` : ''
+  const res = await authFetch(`/api/concepts${qs}`)
+  if (!res.ok) throw new Error('Failed to fetch concepts')
+  return await res.json()
+}
+
+export async function getConcept(conceptId: number) {
+  const res = await authFetch(`/api/concepts/${conceptId}`)
+  if (!res.ok) throw new Error('Failed to fetch concept')
+  return await res.json()
+}
+
+export async function updateConcept(conceptId: number, patch: { canonical_name?: string; canonical_description?: string }) {
+  const res = await authFetch(`/api/concepts/${conceptId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
+  if (!res.ok) throw new Error(await res.text())
   return await res.json()
 }
 
