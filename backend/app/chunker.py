@@ -1,7 +1,11 @@
+import json
+import logging
 import re
 from bisect import bisect_right
 from collections import Counter
 from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
 
 from .config import settings
 from .parser import PageBlock, ParsedBook
@@ -56,6 +60,97 @@ def is_same_slide_topic(title_a: str, title_b: str) -> bool:
     if (len(norm_a) >= 5 and norm_b.startswith(norm_a)) or (len(norm_b) >= 5 and norm_a.startswith(norm_b)):
         return True
     return False
+
+
+def _parse_llm_outline_json(raw: str, num_pages: int) -> list[SectionDraft] | None:
+    try:
+        text = raw.strip()
+        match = re.search(r"\[\s*\{.*?\}\s*\]", text, re.DOTALL)
+        if match:
+            text = match.group(0)
+        else:
+            if text.startswith("```"):
+                text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+                text = re.sub(r"\s*```$", "", text).strip()
+        data = json.loads(text)
+        if not isinstance(data, list) or len(data) < 2:
+            return None
+
+        drafts: list[SectionDraft] = []
+        last_page = 0
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            pno = item.get("page_start")
+            try:
+                pno = int(pno)
+            except (TypeError, ValueError):
+                continue
+            if not title or pno <= last_page or pno > num_pages:
+                continue
+            drafts.append(SectionDraft(title=title[:200], level=1, page_start=pno))
+            last_page = pno
+
+        if not drafts:
+            return None
+
+        if drafts[0].page_start != 1:
+            drafts[0].page_start = 1
+
+        if len(drafts) >= 2:
+            return drafts
+    except Exception as e:
+        logger.warning("Failed to parse LLM outline response: %s", e)
+    return None
+
+
+def _build_sections_via_llm(
+    candidates: list[tuple[int, str]],
+    num_pages: int,
+    doc_title: str | None = None,
+) -> list[SectionDraft] | None:
+    """Use LLM to intelligently synthesize 4 to 8 conceptual modules when slide titling is overly used."""
+    if len(candidates) < 8:
+        return None
+
+    try:
+        from .llm import llm_client
+
+        lines = []
+        seen_pages = set()
+        for pno, title in candidates:
+            if pno in seen_pages:
+                continue
+            seen_pages.add(pno)
+            lines.append(f"Slide {pno}: {title[:80]}")
+            if len(lines) >= 120:
+                break
+
+        slide_text = "\n".join(lines)
+        topic_hint = f"Topic/Title: {doc_title}\n" if doc_title else ""
+        prompt = (
+            f"You are an expert academic curriculum designer.\n"
+            f"{topic_hint}"
+            f"Below is the list of slides and slide titles from a lecture presentation.\n"
+            f"Titling on individual slides is overly used (nearly every slide has a title).\n"
+            f"Your task is to group this lecture into a clean, logical outline of 4 to 8 main coherent conceptual modules/sections.\n"
+            f"Each section must specify the section title and the slide number where that section starts.\n"
+            f"The first section must start at slide 1.\n"
+            f"Every page_start must be an integer from the slides below, in strictly increasing order.\n\n"
+            f"Slides:\n{slide_text}\n\n"
+            f"Respond ONLY with a JSON array: [{{\"title\": \"...\", \"page_start\": 1}}, ...]\n"
+            f"No markdown formatting, no explanations."
+        )
+
+        resp = llm_client.complete([{"role": "user", "content": prompt}], temperature=0.1)
+        if not resp or not resp.strip():
+            return None
+
+        return _parse_llm_outline_json(resp, num_pages)
+    except Exception as e:
+        logger.warning("LLM section generation failed: %s", e)
+        return None
 
 
 def _is_front_matter_title(title: str, blacklist: tuple[str, ...]) -> bool:
@@ -190,6 +285,13 @@ def build_sections(parsed: ParsedBook, max_level: int | None = None) -> list[Sec
         if len(title) <= 2 or re.match(r"^\d+\s*/\s*\d+$", title):
             continue
         candidates.append((block.page, title))
+
+    # When slide titling is overly used across pages, attempt intelligent LLM outline synthesis
+    if len(candidates) >= 10:
+        llm_sections = _build_sections_via_llm(candidates, parsed.num_pages, parsed.title)
+        if llm_sections:
+            logger.info("Generated %d intelligent lecture sections via LLM for '%s'", len(llm_sections), parsed.title)
+            return llm_sections
 
     # Detect recurring running headers/footers using cluster occurrences (non-consecutive runs)
     clusters: list[str] = []

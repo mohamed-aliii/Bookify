@@ -65,21 +65,36 @@ def extract_cover(book_path: str, dest_dir: Path | None = None) -> str | None:
 
 
 def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[list[SectionDraft], list[ChunkDraft], int]:
-    """Build slide-aware sections (merging consecutive slides with identical/related topics) and chunk drafts."""
-    from .chunker import is_same_slide_topic
+    """Build slide-aware sections (intelligent LLM outline with heuristic fallback) and chunk drafts."""
+    from bisect import bisect_right
+    from .chunker import _build_sections_via_llm, is_same_slide_topic
 
-    sections: list[SectionDraft] = []
-    slide_to_sec_idx: dict[int, int] = {}
-    for s in slides:
-        title = (s.title or f"Slide {s.slide_number}").strip()
-        if len(title) > 200:
-            title = title[:200]
-        if sections and is_same_slide_topic(sections[-1].title, title):
-            # Consecutive slide with same topic -> group into previous section
-            slide_to_sec_idx[s.slide_number] = len(sections) - 1
-        else:
+    slide_candidates = [(s.slide_number, (s.title or f"Slide {s.slide_number}").strip()) for s in slides]
+
+    sections: list[SectionDraft] | None = None
+    if len(slides) >= 10:
+        sections = _build_sections_via_llm(slide_candidates, len(slides))
+
+    if not sections:
+        # Heuristic fallback: merge consecutive slides with identical/related topics
+        sections = []
+        for s in slides:
+            title = (s.title or f"Slide {s.slide_number}").strip()
+            if len(title) > 200:
+                title = title[:200]
+            if sections and is_same_slide_topic(sections[-1].title, title):
+                continue
             sections.append(SectionDraft(title=title, level=1, page_start=s.slide_number))
-            slide_to_sec_idx[s.slide_number] = len(sections) - 1
+
+    if not sections:
+        sections = [SectionDraft(title="Presentation", level=1, page_start=1)]
+
+    # Map each slide number to the appropriate section_index
+    starts = [sec.page_start for sec in sections]
+
+    def _sec_idx_for_page(pno: int) -> int:
+        idx = bisect_right(starts, pno) - 1
+        return max(0, min(idx, len(sections) - 1))
 
     # Group slides into chunks of ~chunk_chars
     chunk_drafts: list[ChunkDraft] = []
@@ -95,7 +110,7 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
         text = "\n\n".join(current_texts).strip()
         if text:
             first_pno = min(current_pages)
-            sec_idx = slide_to_sec_idx.get(first_pno, 0)
+            sec_idx = _sec_idx_for_page(first_pno)
             chunk_drafts.append(
                 ChunkDraft(
                     text=text,
@@ -125,7 +140,7 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
             from .chunker import _split_long
 
             parts = _split_long(raw, chunk_chars, chunk_overlap)
-            sec_idx = slide_to_sec_idx.get(s.slide_number, 0)
+            sec_idx = _sec_idx_for_page(s.slide_number)
             for piece in parts:
                 chunk_drafts.append(
                     ChunkDraft(
@@ -268,9 +283,19 @@ def ingest_book(book_id: int) -> None:
         # Clean up any existing sections and chunks for this book before writing new ones
         book.content_start_section_id = None
         db.flush()
-        db.execute(delete(Chunk).where(Chunk.book_id == book.id))
-        db.execute(delete(Section).where(Section.book_id == book.id))
-        db.flush()
+        old_sec_ids = list(db.scalars(select(Section.id).where(Section.book_id == book.id)))
+        if old_sec_ids:
+            from .models import ChatSession, CodeBlock, Flashcard, QuizAttempt, QuizError, ReadingProgress, SectionSummary
+            db.execute(delete(Chunk).where(Chunk.book_id == book.id))
+            db.execute(delete(Flashcard).where(Flashcard.section_id.in_(old_sec_ids)))
+            db.execute(delete(QuizAttempt).where(QuizAttempt.section_id.in_(old_sec_ids)))
+            db.execute(delete(QuizError).where(QuizError.section_id.in_(old_sec_ids)))
+            db.execute(delete(SectionSummary).where(SectionSummary.section_id.in_(old_sec_ids)))
+            db.execute(delete(CodeBlock).where(CodeBlock.book_id == book.id))
+            db.execute(delete(ChatSession).where(ChatSession.section_id.in_(old_sec_ids)))
+            db.execute(delete(ReadingProgress).where(ReadingProgress.section_id.in_(old_sec_ids)))
+            db.execute(delete(Section).where(Section.book_id == book.id))
+            db.flush()
 
         section_rows: list[Section] = []
         stack: list[Section] = []
