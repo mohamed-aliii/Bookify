@@ -100,27 +100,49 @@ def get_concept(concept_id: int, db: Session = Depends(get_db)):
     relations = []
     for r in out_rels:
         tgt = db.get(Concept, r.target_concept_id)
+        # TXT for target: description + snippet from its primary mention
+        tgt_mention = db.scalar(select(ConceptMention).where(ConceptMention.concept_id == r.target_concept_id).limit(1)) if tgt else None
         relations.append({
             "id": r.id,
             "direction": "outgoing",
             "other_concept_id": r.target_concept_id,
             "other_name": tgt.canonical_name if tgt else "?",
+            "other_description": tgt.canonical_description if tgt else "",
+            "other_difficulty": tgt.difficulty if tgt else None,
+            "other_snippet": tgt_mention.snippet if tgt_mention else None,
+            "other_section_title": tgt_mention.section_title_snapshot if tgt_mention else None,
+            "other_book_title": (db.get(Book, tgt_mention.book_id).title if tgt_mention and db.get(Book, tgt_mention.book_id) else None),
+            "other_book_id": tgt_mention.book_id if tgt_mention else None,
             "relationship_type": r.relationship_type,
             "strength": r.strength,
             "explanation_long": r.explanation_long,
             "explanation_short": r.explanation_short,
+            # Source TXT (current concept) for convenience
+            "source_name": c.canonical_name,
+            "source_description": c.canonical_description,
+            "source_snippet": (mentions[0].snippet if mentions else None),
         })
     for r in in_rels:
         src = db.get(Concept, r.source_concept_id)
+        src_mention = db.scalar(select(ConceptMention).where(ConceptMention.concept_id == r.source_concept_id).limit(1)) if src else None
         relations.append({
             "id": r.id,
             "direction": "incoming",
             "other_concept_id": r.source_concept_id,
             "other_name": src.canonical_name if src else "?",
+            "other_description": src.canonical_description if src else "",
+            "other_difficulty": src.difficulty if src else None,
+            "other_snippet": src_mention.snippet if src_mention else None,
+            "other_section_title": src_mention.section_title_snapshot if src_mention else None,
+            "other_book_title": (db.get(Book, src_mention.book_id).title if src_mention and db.get(Book, src_mention.book_id) else None),
+            "other_book_id": src_mention.book_id if src_mention else None,
             "relationship_type": r.relationship_type,
             "strength": r.strength,
             "explanation_long": r.explanation_long,
             "explanation_short": r.explanation_short,
+            "source_name": src.canonical_name if src else "?",
+            "source_description": src.canonical_description if src else "",
+            "source_snippet": src_mention.snippet if src_mention else None,
         })
 
     # courses involved via mentions
@@ -265,7 +287,7 @@ def reconcile_concepts(dry_run: bool = False, db: Session = Depends(get_db)):
                     "proposed_snippet": concepts[j].canonical_description[:400],
                     "similarity": f"{sim:.3f}",
                 })
-                raw = llm_client.complete([
+                raw = llm_client.complete_for_cross_kg([
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": "Decide now. Return JSON only."},
                 ])

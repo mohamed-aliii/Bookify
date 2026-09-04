@@ -5,8 +5,8 @@ from typing import List
 _lock = threading.Lock()
 _next_index = 0
 
-# We support OPENROUTER_API_KEY + OPENROUTER_API_KEY_2..10
-_CANDIDATE_ENVS = ["OPENROUTER_API_KEY"] + [f"OPENROUTER_API_KEY_{i}" for i in range(2, 11)]
+# We support OPENROUTER_API_KEY + OPENROUTER_API_KEY_2..10 + provider alias
+_CANDIDATE_ENVS = ["OPENROUTER_API_KEY"] + [f"OPENROUTER_API_KEY_{i}" for i in range(2, 11)] + ["OPENROUTER_API_KEY_PROVIDER_2"]
 
 
 def collect_openrouter_keys() -> List[str]:
@@ -54,6 +54,33 @@ def get_keys_in_rotation_order() -> List[str]:
         _next_index = (_next_index + 1) % len(keys)
     # rotate
     return keys[start:] + keys[:start]
+
+
+def get_cross_kg_key() -> str | None:
+    """Dedicated key for cross-material KG. Prefers OPENROUTER_API_KEY_PROVIDER_2."""
+    # Highest priority: explicit provider alias
+    for env_name in ["OPENROUTER_API_KEY_PROVIDER_2", "OPENROUTER_API_KEY_2"]:
+        val = os.getenv(env_name)
+        if val:
+            val = val.strip().strip('"').strip("'")
+            if val:
+                return val
+    # Fallback to first key in rotation pool
+    keys = collect_openrouter_keys()
+    return keys[0] if keys else None
+
+
+def get_keys_for_cross_kg() -> List[str]:
+    """Keys for cross KG: provider_2 first, then rest of pool (deduped)."""
+    provider_key = get_cross_kg_key()
+    if not provider_key:
+        return get_keys_in_rotation_order()
+    all_keys = collect_openrouter_keys()
+    # Put provider key first, then remaining in rotation order (excluding duplicate)
+    remaining = [k for k in all_keys if k != provider_key]
+    # Also include rotation ordering for remaining
+    # Simple: provider first, then round-robin remainder starting from next index
+    return [provider_key] + remaining
 
 
 def is_rate_limit_error(exc: Exception) -> bool:

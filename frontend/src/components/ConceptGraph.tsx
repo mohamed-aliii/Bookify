@@ -62,6 +62,7 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
   const [sections, setSections] = useState<Section[]>([])
   const [loading, setLoading] = useState(true)
   const [extractingSection, setExtractingSection] = useState<number | null>(null)
+  const [removingSection, setRemovingSection] = useState<number | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [selected, setSelected] = useState<ConceptGraphNode | null>(null)
   const [detail, setDetail] = useState<any>(null)
@@ -257,6 +258,36 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
     }
   }
 
+  const handleRemoveChapter = async (sectionId: number, title: string) => {
+    if (!confirm(`Remove KG extraction for "${title}"? This deletes its concepts (if not shared elsewhere) and all its links. This cannot be undone.`)) return
+    setRemovingSection(sectionId)
+    setError(null)
+    try {
+      await api.deleteSectionConceptGraph(bookId, sectionId)
+      await load()
+      setSelected(null); setDetail(null); setSelectedLink(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRemovingSection(null)
+    }
+  }
+
+  const handleRemoveBookKG = async () => {
+    if (!confirm(`Remove KG extraction for the entire book? This deletes all concepts/mentions for this book (orphan concepts elsewhere are kept, shared ones retain other mentions). Cannot be undone.`)) return
+    setRemovingSection(-1)
+    setError(null)
+    try {
+      await api.deleteBookConceptGraph(bookId)
+      await load()
+      setSelected(null); setDetail(null); setSelectedLink(null)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setRemovingSection(null)
+    }
+  }
+
   const handleNodeClick = (node: GFNode) => {
     setSelected(node)
     setSelectedLink(null)
@@ -439,6 +470,16 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
           >
             ⊡ Fit
           </button>
+          {hasGraph && (
+            <button
+              onClick={handleRemoveBookKG}
+              disabled={removingSection !== null}
+              className="rounded-lg border border-red-500/20 bg-red-500/10 px-2.5 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20 disabled:opacity-40"
+              title="Remove KG extraction for entire book"
+            >
+              {removingSection === -1 ? '…' : 'Clear KG'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -488,17 +529,29 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                         {isFocused && <span className="rounded bg-white/10 px-1 py-px text-[10px] text-white">Focused</span>}
                       </div>
                     </div>
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleExtractChapter(c.id) }}
-                      disabled={extractingSection !== null}
-                      className={`shrink-0 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-40 ${
-                        isEmpty
-                          ? 'border-indigo-500/30 bg-indigo-600 text-white hover:bg-indigo-500'
-                          : 'border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white'
-                      }`}
-                    >
-                      {extractingSection === c.id ? '…' : (count > 0 ? 'Update' : 'Extract')}
-                    </button>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleExtractChapter(c.id) }}
+                        disabled={extractingSection !== null || removingSection !== null}
+                        className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-40 ${
+                          isEmpty
+                            ? 'border-indigo-500/30 bg-indigo-600 text-white hover:bg-indigo-500'
+                            : 'border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08] hover:text-white'
+                        }`}
+                      >
+                        {extractingSection === c.id ? '…' : (count > 0 ? 'Update' : 'Extract')}
+                      </button>
+                      {!isEmpty && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); handleRemoveChapter(c.id, c.title) }}
+                          disabled={removingSection !== null || extractingSection !== null}
+                          className="rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-1 text-[11px] font-medium text-red-300 hover:bg-red-500/20 disabled:opacity-40"
+                          title="Remove KG extraction for this chapter"
+                        >
+                          {removingSection === c.id ? '…' : 'Remove'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 )
               })}
@@ -797,9 +850,23 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                       </button>
                     </div>
                     <div className="flex-1 min-h-0 overflow-y-auto p-4">
-                      <h4 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">Why they connect</h4>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Source TXT</div>
+                          <div className="mt-1 text-xs font-semibold text-slate-200 line-clamp-2">{srcNode?.name || `#${srcId}`}</div>
+                          <div className="mt-1 text-[11px] leading-relaxed text-slate-400 line-clamp-4">{srcNode?.description || '—'}</div>
+                          {srcNode && (srcNode as any).book_title && <div className="mt-1.5 text-[10px] text-slate-500 truncate">{(srcNode as any).book_title} · {(srcNode as any).section_title || ''}</div>}
+                        </div>
+                        <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5">
+                          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Target TXT</div>
+                          <div className="mt-1 text-xs font-semibold text-slate-200 line-clamp-2">{tgtNode?.name || `#${tgtId}`}</div>
+                          <div className="mt-1 text-[11px] leading-relaxed text-slate-400 line-clamp-4">{tgtNode?.description || '—'}</div>
+                          {tgtNode && (tgtNode as any).book_title && <div className="mt-1.5 text-[10px] text-slate-500 truncate">{(tgtNode as any).book_title} · {(tgtNode as any).section_title || ''}</div>}
+                        </div>
+                      </div>
+                      <h4 className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Why they connect</h4>
                       <div className="mt-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
-                        <div className="max-h-[42vh] overflow-y-auto pr-1.5 text-sm leading-relaxed text-slate-300 overscroll-contain">
+                        <div className="max-h-[32vh] overflow-y-auto pr-1.5 text-sm leading-relaxed text-slate-300 overscroll-contain">
                           {selectedLink.explanation ? (
                             <p className="whitespace-pre-wrap">{selectedLink.explanation}</p>
                           ) : (
@@ -812,7 +879,7 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                         </div>
                       </div>
                       <div className="mt-4 rounded-xl bg-indigo-500/10 p-3 text-[11px] leading-relaxed text-indigo-200/80">
-                        Click source or target to pin that concept. Links are by-book only.
+                        Source and target TXT shown above — explanation bridges these two texts. Click source or target to pin that concept.
                       </div>
                     </div>
                     <div className="border-t border-white/[0.06] p-3">
@@ -877,7 +944,13 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                             <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: REL_COLORS[c.relationship_type] || '#64748b' }} />
                             <div className="min-w-0 flex-1">
                               <div className="truncate text-xs font-medium text-slate-200">{c.name}</div>
-                              <div className="text-[11px] text-slate-500 truncate">{REL_LABELS[c.relationship_type] || c.relationship_type} · {c.direction}{c.explanation ? ` · ${c.explanation.slice(0, 80)}…` : ''}</div>
+                              <div className="text-[11px] text-slate-500 truncate">{REL_LABELS[c.relationship_type] || c.relationship_type} · {c.direction}</div>
+                              {(c.description || c.snippet) && <div className="mt-1 text-[11px] leading-relaxed text-slate-400 line-clamp-2">{(c.description || c.snippet || '').slice(0,110)}</div>}
+                              {c.explanation && <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-500">Why: {c.explanation.slice(0, 100)}…</div>}
+                              <div className="mt-1 grid grid-cols-2 gap-1">
+                                <div className="rounded bg-black/20 px-1.5 py-1 text-[10px] text-slate-500 truncate">Src: {(c.source_txt || selected?.description || '').slice(0,60)}</div>
+                                <div className="rounded bg-black/20 px-1.5 py-1 text-[10px] text-slate-500 truncate">Tgt: {(c.target_txt || c.description || '').slice(0,60)}</div>
+                              </div>
                             </div>
                             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-slate-600"><path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                           </button>

@@ -168,7 +168,7 @@ def extract_concept_edges(book_id: int, body: GraphExtractRequest, db: Session =
     ]
 
     try:
-        raw = llm_client.complete(messages)
+        raw = llm_client.complete_for_cross_kg(messages)
         items = _extract_json_array(raw)
     except Exception as exc:
         logger.exception("Concept edge extraction failed")
@@ -250,7 +250,7 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
     ]
 
     try:
-        raw = llm_client.complete(messages)
+        raw = llm_client.complete_for_cross_kg(messages)
         items = _extract_json_array(raw)
     except Exception as exc:
         logger.exception("Section concept edge extraction failed")
@@ -296,6 +296,140 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
     return {"ok": True, "kp_created": kp_created, "created": created, "total_edges": total_edges or 0}
 
 
+def _clear_chapter_kg(db: Session, book_id: int, section: Section) -> dict:
+    """Remove all KG output (ConceptMentions + legacy KPs/edges) for the given chapter/section.
+
+    - Deletes ConceptMentions for all leaf sections under `section` for this book.
+    - Orphan Concepts (no remaining mentions) are deleted along with their aliases and relations.
+    - Legacy KnowledgePoints + ConceptEdges for those leaves are also removed.
+
+    Returns stats dict.
+    """
+    from sqlalchemy import delete as sa_delete
+    from ..models import ConceptAlias as CA, ConceptMention as CM, ConceptRelation as CR
+
+    # Resolve leaf ids for this chapter
+    try:
+        from .intelligence import _leaf_sections_for_chapter
+        leaf_ids = [lf.id for lf in _leaf_sections_for_chapter(db, book_id, section)]
+        if not leaf_ids:
+            leaf_ids = [section.id]
+    except Exception:
+        leaf_ids = [section.id]
+
+    # Gather affected concept ids before deletion (for orphan check)
+    affected_cids: set[int] = set()
+    for leaf_id in leaf_ids:
+        for mid in db.scalars(select(CM.concept_id).where(CM.book_id == book_id, CM.section_id == leaf_id)):
+            affected_cids.add(mid)
+
+    # Delete ConceptMentions for this chapter
+    mentions_deleted = 0
+    if leaf_ids:
+        result = db.execute(sa_delete(CM).where(CM.book_id == book_id, CM.section_id.in_(leaf_ids)))
+        mentions_deleted = result.rowcount or 0
+
+    # Legacy cleanup: KnowledgePoints + ConceptEdges for those leaves
+    legacy_kp_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.book_id == book_id, KnowledgePoint.section_id.in_(leaf_ids)))) if leaf_ids else []
+    legacy_kps_deleted = 0
+    legacy_edges_deleted = 0
+    if legacy_kp_ids:
+        legacy_kps_deleted = db.execute(sa_delete(KnowledgePoint).where(KnowledgePoint.id.in_(legacy_kp_ids))).rowcount or 0
+        # ConceptEdge stores both source/target as KnowledgePoint ids; delete where either is in legacy set
+        if legacy_kp_ids:
+            # Need to handle both source and target
+            for eid in list(db.scalars(select(ConceptEdge.id).where((ConceptEdge.source_point_id.in_(legacy_kp_ids)) | (ConceptEdge.target_point_id.in_(legacy_kp_ids))))):
+                obj = db.get(ConceptEdge, eid)
+                if obj:
+                    db.delete(obj)
+                    legacy_edges_deleted += 1
+
+    # Orphan Concept cleanup: concepts that now have zero mentions
+    orphan_concepts = 0
+    orphan_relations = 0
+    orphan_aliases = 0
+    for cid in list(affected_cids):
+        remaining = db.scalar(select(func.count()).select_from(CM).where(CM.concept_id == cid))
+        if not remaining:
+            # Delete aliases first
+            for alias in list(db.scalars(select(CA).where(CA.concept_id == cid))):
+                db.delete(alias)
+                orphan_aliases += 1
+            # Delete relations where this concept is source or target
+            for rel in list(db.scalars(select(CR).where((CR.source_concept_id == cid) | (CR.target_concept_id == cid)))):
+                db.delete(rel)
+                orphan_relations += 1
+            # Delete concept itself
+            cobj = db.get(Concept, cid)
+            if cobj:
+                db.delete(cobj)
+                orphan_concepts += 1
+
+    db.flush()
+    return {
+        "leaf_sections": len(leaf_ids),
+        "mentions_deleted": mentions_deleted,
+        "legacy_kps_deleted": legacy_kps_deleted,
+        "legacy_edges_deleted": legacy_edges_deleted,
+        "orphan_concepts_deleted": orphan_concepts,
+        "orphan_relations_deleted": orphan_relations,
+        "orphan_aliases_deleted": orphan_aliases,
+    }
+
+
+@router.delete("/books/{book_id}/concept-graph")
+def delete_book_concept_graph(book_id: int, db: Session = Depends(get_db)):
+    """Remove all KG extraction output for the entire book."""
+    book = _load_book(db, book_id)
+    from sqlalchemy import delete as sa_delete
+    from ..models import ConceptAlias as CA, ConceptMention as CM, ConceptRelation as CR
+
+    affected_cids = set(db.scalars(select(CM.concept_id).where(CM.book_id == book_id)))
+    mentions_deleted = db.execute(sa_delete(CM).where(CM.book_id == book_id)).rowcount or 0
+
+    legacy_kp_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.book_id == book_id)))
+    legacy_kps_deleted = db.execute(sa_delete(KnowledgePoint).where(KnowledgePoint.book_id == book_id)).rowcount or 0
+    legacy_edges_deleted = 0
+    if legacy_kp_ids:
+        for eid in list(db.scalars(select(ConceptEdge.id).where((ConceptEdge.source_point_id.in_(legacy_kp_ids)) | (ConceptEdge.target_point_id.in_(legacy_kp_ids))))):
+            obj = db.get(ConceptEdge, eid)
+            if obj:
+                db.delete(obj)
+                legacy_edges_deleted += 1
+
+    orphan_concepts = 0
+    orphan_relations = 0
+    orphan_aliases = 0
+    for cid in list(affected_cids):
+        remaining = db.scalar(select(func.count()).select_from(CM).where(CM.concept_id == cid))
+        if not remaining:
+            for alias in list(db.scalars(select(CA).where(CA.concept_id == cid))):
+                db.delete(alias)
+                orphan_aliases += 1
+            for rel in list(db.scalars(select(CR).where((CR.source_concept_id == cid) | (CR.target_concept_id == cid)))):
+                db.delete(rel)
+                orphan_relations += 1
+            cobj = db.get(Concept, cid)
+            if cobj:
+                db.delete(cobj)
+                orphan_concepts += 1
+
+    db.commit()
+    return {"ok": True, "book_id": book_id, "mentions_deleted": mentions_deleted, "legacy_kps_deleted": legacy_kps_deleted, "legacy_edges_deleted": legacy_edges_deleted, "orphan_concepts_deleted": orphan_concepts, "orphan_relations_deleted": orphan_relations}
+
+
+@router.delete("/books/{book_id}/sections/{section_id}/concept-graph")
+def delete_section_concept_graph(book_id: int, section_id: int, db: Session = Depends(get_db)):
+    """Remove KG extraction output for a single chapter/section (and its leaves)."""
+    book = _load_book(db, book_id)
+    section = db.get(Section, section_id)
+    if section is None or section.book_id != book_id:
+        raise HTTPException(status_code=404, detail="Section not found")
+    stats = _clear_chapter_kg(db, book_id, section)
+    db.commit()
+    return {"ok": True, "book_id": book_id, "section_id": section_id, **stats}
+
+
 @router.get("/books/{book_id}/concept-graph/{kp_id}")
 def get_kp_detail(book_id: int, kp_id: int, db: Session = Depends(get_db)):
     """Dual path: if kp_id is a canonical Concept id (has mention in this book), serve canonical; else fall back to legacy KnowledgePoint."""
@@ -308,17 +442,53 @@ def get_kp_detail(book_id: int, kp_id: int, db: Session = Depends(get_db)):
         legacy_kp = db.scalar(select(KnowledgePoint).where(KnowledgePoint.book_id == book_id, KnowledgePoint.name == concept.canonical_name).limit(1))
         ukp = db.scalar(select(UserKnowledgePoint).where(UserKnowledgePoint.knowledge_point_id == legacy_kp.id)) if legacy_kp else None
         section = db.get(Section, has_mention.section_id) if has_mention else None
+        # Fetch TXT snippets for current concept
+        current_mention = db.scalar(select(ConceptMention).where(ConceptMention.concept_id == concept.id).limit(1))
+        current_txt = concept.canonical_description
+        current_snippet = current_mention.snippet if current_mention else None
         outgoing = list(db.scalars(select(ConceptRelation).where(ConceptRelation.source_concept_id == concept.id)))
         incoming = list(db.scalars(select(ConceptRelation).where(ConceptRelation.target_concept_id == concept.id)))
         connections = []
         for r in outgoing:
             tgt = db.get(Concept, r.target_concept_id)
             if tgt:
-                connections.append({"kp_id": tgt.id, "name": tgt.canonical_name, "direction": "outgoing", "relationship_type": r.relationship_type, "strength": r.strength, "explanation": r.explanation_long or r.explanation_short})
+                tgt_mention = db.scalar(select(ConceptMention).where(ConceptMention.concept_id == tgt.id).limit(1))
+                connections.append({
+                    "kp_id": tgt.id,
+                    "name": tgt.canonical_name,
+                    "description": tgt.canonical_description,
+                    "snippet": tgt_mention.snippet if tgt_mention else None,
+                    "section_title": tgt_mention.section_title_snapshot if tgt_mention else None,
+                    "book_title": (db.get(Book, tgt_mention.book_id).title if tgt_mention and db.get(Book, tgt_mention.book_id) else None),
+                    "direction": "outgoing",
+                    "relationship_type": r.relationship_type,
+                    "strength": r.strength,
+                    "explanation": r.explanation_long or r.explanation_short,
+                    "source_txt": current_txt,
+                    "source_snippet": current_snippet,
+                    "target_txt": tgt.canonical_description,
+                    "target_snippet": tgt_mention.snippet if tgt_mention else None,
+                })
         for r in incoming:
             src = db.get(Concept, r.source_concept_id)
             if src:
-                connections.append({"kp_id": src.id, "name": src.canonical_name, "direction": "incoming", "relationship_type": r.relationship_type, "strength": r.strength, "explanation": r.explanation_long or r.explanation_short})
+                src_mention = db.scalar(select(ConceptMention).where(ConceptMention.concept_id == src.id).limit(1))
+                connections.append({
+                    "kp_id": src.id,
+                    "name": src.canonical_name,
+                    "description": src.canonical_description,
+                    "snippet": src_mention.snippet if src_mention else None,
+                    "section_title": src_mention.section_title_snapshot if src_mention else None,
+                    "book_title": (db.get(Book, src_mention.book_id).title if src_mention and db.get(Book, src_mention.book_id) else None),
+                    "direction": "incoming",
+                    "relationship_type": r.relationship_type,
+                    "strength": r.strength,
+                    "explanation": r.explanation_long or r.explanation_short,
+                    "source_txt": src.canonical_description,
+                    "source_snippet": src_mention.snippet if src_mention else None,
+                    "target_txt": current_txt,
+                    "target_snippet": current_snippet,
+                })
         # Include legacy ConceptEdge-based connections if no canonical relations yet
         if not connections and legacy_kp:
             for e in db.scalars(select(ConceptEdge).where(ConceptEdge.source_point_id == legacy_kp.id)):
@@ -356,11 +526,33 @@ def get_kp_detail(book_id: int, kp_id: int, db: Session = Depends(get_db)):
     for edge in outgoing:
         target = db.get(KnowledgePoint, edge.target_point_id)
         if target:
-            connections.append({"kp_id": target.id, "name": target.name, "direction": "outgoing", "relationship_type": edge.relationship_type, "strength": edge.strength, "explanation": edge.explanation or ""})
+            connections.append({
+                "kp_id": target.id,
+                "name": target.name,
+                "description": target.description,
+                "snippet": None,
+                "direction": "outgoing",
+                "relationship_type": edge.relationship_type,
+                "strength": edge.strength,
+                "explanation": edge.explanation or "",
+                "source_txt": kp.description,
+                "target_txt": target.description,
+            })
     for edge in incoming:
         source = db.get(KnowledgePoint, edge.source_point_id)
         if source:
-            connections.append({"kp_id": source.id, "name": source.name, "direction": "incoming", "relationship_type": edge.relationship_type, "strength": edge.strength, "explanation": edge.explanation or ""})
+            connections.append({
+                "kp_id": source.id,
+                "name": source.name,
+                "description": source.description,
+                "snippet": None,
+                "direction": "incoming",
+                "relationship_type": edge.relationship_type,
+                "strength": edge.strength,
+                "explanation": edge.explanation or "",
+                "source_txt": source.description,
+                "target_txt": kp.description,
+            })
 
     return {
         "id": kp.id,

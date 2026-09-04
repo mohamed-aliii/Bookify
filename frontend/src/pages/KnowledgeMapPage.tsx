@@ -588,13 +588,13 @@ function KnowledgeMapContent() {
                   ...intra.map(e => {
                     const otherId = e.source === nid ? e.target : e.source
                     const other = graph?.nodes.find(n => n.id === otherId)
-                    return { id: otherId, name: other?.name || `#${otherId}`, book: other ? nodeBookKey(other as any) : '', type: e.relationship_type, kind: 'intra' as const, strength: e.strength }
+                    return { id: otherId, name: other?.name || `#${otherId}`, book: other ? nodeBookKey(other as any) : '', type: e.relationship_type, kind: 'intra' as const, strength: e.strength, expl: (e as any).explanation, sourceTxt: selected?.description || '', targetTxt: other?.description || '', sourceSnippet: null, targetSnippet: null }
                   }),
                   ...inter.map(e => {
                     const otherId = e.source_kp_id === nid ? e.target_kp_id : e.source_kp_id
                     const other = graph?.nodes.find(n => n.id === otherId)
                     const isSource = e.source_kp_id === nid
-                    return { id: otherId, name: (isSource ? e.target_kp_name : e.source_kp_name) || other?.name || `#${otherId}`, book: (isSource ? e.target_book_title : e.source_book_title) || (other ? nodeBookKey(other as any) : ''), type: e.relationship_label, kind: 'inter' as const, strength: e.similarity, expl: e.explanation }
+                    return { id: otherId, name: (isSource ? e.target_kp_name : e.source_kp_name) || other?.name || `#${otherId}`, book: (isSource ? e.target_book_title : e.source_book_title) || (other ? nodeBookKey(other as any) : ''), type: e.relationship_label, kind: 'inter' as const, strength: e.similarity, expl: e.explanation || (e as any).explanation_short, sourceTxt: isSource ? selected?.description || '' : (other?.description || (e as any).source_txt || ''), targetTxt: isSource ? (other?.description || (e as any).target_txt || '') : selected?.description || '', sourceSnippet: (e as any).source_snippet || null, targetSnippet: (e as any).target_snippet || null, edge: e }
                   }),
                 ]
                 if (all.length === 0) {
@@ -628,7 +628,17 @@ function KnowledgeMapContent() {
                               <span className="truncate">{c.book.slice(0, 24)}</span>
                               {c.strength != null && <span className="ml-auto rounded bg-black/20 px-1 py-px font-medium">{Math.round(c.strength * 100)}%</span>}
                             </div>
-                            {(c as any).expl && <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-slate-500">{(c as any).expl}</div>}
+                            <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                              <div className="rounded-lg border border-white/[0.04] bg-black/20 px-2 py-1.5">
+                                <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Source TXT</div>
+                                <div className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{(c as any).sourceTxt?.slice(0,120) || selected?.description?.slice(0,120) || '—'}</div>
+                              </div>
+                              <div className="rounded-lg border border-white/[0.04] bg-black/20 px-2 py-1.5">
+                                <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Target TXT</div>
+                                <div className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{(c as any).targetTxt?.slice(0,120) || c.name}</div>
+                              </div>
+                            </div>
+                            {(c as any).expl && <div className="mt-1.5 rounded-lg bg-white/[0.02] px-2 py-1.5 text-[11px] leading-relaxed text-slate-300 border border-white/[0.04]"><span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Why they connect: </span>{(c as any).expl.slice(0,220)}{(c as any).expl.length>220?'…':''}</div>}
                           </div>
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-slate-600"><path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                         </button>

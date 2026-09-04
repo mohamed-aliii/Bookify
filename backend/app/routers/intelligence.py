@@ -201,7 +201,7 @@ def _extract_single_leaf_kps(db: Session, book_id: int, leaf: Section) -> list[d
         {"role": "user", "content": f"Excerpts from \"{leaf.title}\" (chapter: leaf):\n\n{excerpts}\n\nExtract knowledge points now."},
     ]
     try:
-        raw = llm_client.complete(messages)
+        raw = llm_client.complete_for_cross_kg(messages)
         items = _extract_json_array(raw)
         return items
     except Exception as exc:
@@ -363,7 +363,7 @@ def _resolve_or_create_concept(
                 "proposed_snippet": leaf_snippet[:500],
                 "similarity": f"{similarity:.3f}",
             })
-            raw = llm_client.complete([
+            raw = llm_client.complete_for_cross_kg([
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": "Decide now. Return JSON only."},
             ])

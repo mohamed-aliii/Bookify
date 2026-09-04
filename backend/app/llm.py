@@ -5,7 +5,7 @@ from collections.abc import Iterator
 import litellm
 
 from .config import settings
-from .openrouter_rotation import get_keys_in_rotation_order, is_rate_limit_error
+from .openrouter_rotation import get_cross_kg_key, get_keys_for_cross_kg, get_keys_in_rotation_order, is_rate_limit_error
 
 logger = logging.getLogger(__name__)
 
@@ -97,6 +97,36 @@ class LLMClient:
                 last_exc = exc
                 if is_rate_limit_error(exc) and attempt < len(keys) - 1:
                     logger.warning("LLM rate-limited on key %d/%d — rotating", attempt + 1, len(keys))
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        return ""
+
+    def complete_for_cross_kg(self, messages: list[dict], temperature: float | None = None) -> str:
+        """Cross KG path — prefers OPENROUTER_API_KEY_PROVIDER_2, then falls back to pool."""
+        keys = get_keys_for_cross_kg()
+        if not keys:
+            # Fallback to regular path
+            return self.complete(messages, temperature)
+        # Use cross_kg_model if configured
+        model_override = getattr(settings.llm, "cross_kg_model", None)
+        last_exc: Exception | None = None
+        for attempt, key in enumerate(keys):
+            try:
+                kwargs = _completion_kwargs(temperature, api_key=key)
+                if model_override:
+                    kwargs["model"] = model_override
+                resp = litellm.completion(messages=messages, stream=False, **kwargs)
+                try:
+                    content = resp.choices[0].message.content or ""
+                except Exception:
+                    content = str(resp)
+                return content
+            except Exception as exc:
+                last_exc = exc
+                if is_rate_limit_error(exc) and attempt < len(keys) - 1:
+                    logger.warning("Cross-KG LLM rate-limited on key %d/%d (provider_2 first) — rotating", attempt + 1, len(keys))
                     continue
                 raise
         if last_exc:

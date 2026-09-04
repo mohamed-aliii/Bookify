@@ -16,6 +16,8 @@ load_dotenv(ROOT_DIR / ".env", override=True)
 class LLMConfig:
     model: str = "openai/gpt-4o-mini"
     api_key_env: str = "OPENROUTER_API_KEY"
+    cross_kg_api_key_env: str = "OPENROUTER_API_KEY_PROVIDER_2"
+    cross_kg_model: str | None = None
     temperature: float | None = None
     max_history_messages: int = 10
     extra_body: dict | None = None

@@ -143,7 +143,7 @@ def extract_cross_book_links(db: Session = Depends(get_db)):
                     "proposed_snippet": (mb.snippet[:400] if mb and mb.snippet else b.canonical_description[:400]),
                     "similarity": f"{sim:.3f}",
                 })
-                raw = llm_client.complete([
+                raw = llm_client.complete_for_cross_kg([
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": "Decide now. Return JSON only."},
                 ])
@@ -396,6 +396,8 @@ def get_unified_graph(course_id: int | None = None, book_id: int | None = None, 
                 # cross-book
                 src_book_title = (db.get(Book, src_mentions[0].book_id).title if src_mentions and db.get(Book, src_mentions[0].book_id) else None)
                 tgt_book_title = (db.get(Book, tgt_mentions[0].book_id).title if tgt_mentions and db.get(Book, tgt_mentions[0].book_id) else None)
+                src_concept = db.get(Concept, r.source_concept_id)
+                tgt_concept = db.get(Concept, r.target_concept_id)
                 inter.append({
                     "id": r.id,
                     "source_kp_id": r.source_concept_id,
@@ -406,8 +408,15 @@ def get_unified_graph(course_id: int | None = None, book_id: int | None = None, 
                     "explanation_short": r.explanation_short,
                     "source_book_title": src_book_title,
                     "target_book_title": tgt_book_title,
-                    "source_kp_name": db.get(Concept, r.source_concept_id).canonical_name if db.get(Concept, r.source_concept_id) else "?",
-                    "target_kp_name": db.get(Concept, r.target_concept_id).canonical_name if db.get(Concept, r.target_concept_id) else "?",
+                    "source_kp_name": src_concept.canonical_name if src_concept else "?",
+                    "target_kp_name": tgt_concept.canonical_name if tgt_concept else "?",
+                    # TXT for source and target to be shown inside connection explanation
+                    "source_txt": src_concept.canonical_description if src_concept else "",
+                    "target_txt": tgt_concept.canonical_description if tgt_concept else "",
+                    "source_snippet": (db.scalar(select(ConceptMention).where(ConceptMention.concept_id == r.source_concept_id).limit(1)).snippet if db.scalar(select(ConceptMention).where(ConceptMention.concept_id == r.source_concept_id).limit(1)) else None),
+                    "target_snippet": (db.scalar(select(ConceptMention).where(ConceptMention.concept_id == r.target_concept_id).limit(1)).snippet if db.scalar(select(ConceptMention).where(ConceptMention.concept_id == r.target_concept_id).limit(1)) else None),
+                    "source_book_id": src_mentions[0].book_id if src_mentions else None,
+                    "target_book_id": tgt_mentions[0].book_id if tgt_mentions else None,
                 })
         # Also include legacy CrossBookLinks translated to canonical ids for backward compat when no canonical rels yet
         if not inter and not rels:
@@ -522,7 +531,7 @@ def get_related_sections(book_id: int, section_id: int, db: Session = Depends(ge
                             })},
                             {"role": "user", "content": "Explain why these sections are related."},
                         ]
-                        r["explanation"] = llm_client.complete(messages).strip()[:300]
+                        r["explanation"] = llm_client.complete_for_cross_kg(messages).strip()[:300]
                     except Exception:
                         r["explanation"] = f"Both sections share related concepts ({r['max_similarity']:.0%} similarity)"
                 for r in results[3:]:
@@ -588,7 +597,7 @@ def get_related_sections(book_id: int, section_id: int, db: Session = Depends(ge
                 })},
                 {"role": "user", "content": "Explain why these sections are related."},
             ]
-            r["explanation"] = llm_client.complete(messages).strip()[:300]
+            r["explanation"] = llm_client.complete_for_cross_kg(messages).strip()[:300]
         except Exception:
             r["explanation"] = f"Both sections share related concepts ({r['max_similarity']:.0%} similarity)"
 

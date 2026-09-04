@@ -524,6 +524,18 @@ export async function extractSectionConceptGraph(bookId: number, sectionId: numb
   return await res.json() as Promise<{ ok: boolean; kp_created?: number; created?: number; total_edges?: number; message?: string }>
 }
 
+export async function deleteSectionConceptGraph(bookId: number, sectionId: number) {
+  const res = await authFetch(`/api/books/${bookId}/sections/${sectionId}/concept-graph`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await res.text())
+  return await res.json() as Promise<{ ok: boolean; mentions_deleted?: number; orphan_concepts_deleted?: number }>
+}
+
+export async function deleteBookConceptGraph(bookId: number) {
+  const res = await authFetch(`/api/books/${bookId}/concept-graph`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await res.text())
+  return await res.json() as Promise<{ ok: boolean; mentions_deleted?: number }>
+}
+
 export async function getContentStart(bookId: number) {
   if (!Number.isFinite(bookId)) throw new Error('Invalid book id')
   const res = await authFetch(`/api/books/${bookId}/content-start`)
