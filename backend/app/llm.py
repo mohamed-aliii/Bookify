@@ -68,10 +68,10 @@ class LLMClient:
                 return
             except Exception as exc:
                 last_exc = exc
-                if is_rate_limit_error(exc) and attempt < len(keys) - 1:
-                    logger.warning("LLM rate-limited on key %d/%d — rotating to next OpenRouter key", attempt + 1, len(keys))
+                if attempt < len(keys) - 1:
+                    logger.warning("LLM stream error on key %d/%d (%s) — rotating to next OpenRouter key", attempt + 1, len(keys), exc)
                     continue
-                # Non-rate-limit or last key — re-raise
+                # Last key — re-raise
                 raise
         if last_exc:
             raise last_exc
@@ -86,17 +86,15 @@ class LLMClient:
             try:
                 # Use non-streaming path with explicit key to avoid double rotation via stream()
                 resp = litellm.completion(messages=messages, stream=False, **_completion_kwargs(temperature, api_key=key))
-                # litellm non-stream returns object with choices[0].message.content
                 try:
                     content = resp.choices[0].message.content or ""
                 except Exception:
-                    # Fallback: treat as string
                     content = str(resp)
                 return content
             except Exception as exc:
                 last_exc = exc
-                if is_rate_limit_error(exc) and attempt < len(keys) - 1:
-                    logger.warning("LLM rate-limited on key %d/%d — rotating", attempt + 1, len(keys))
+                if attempt < len(keys) - 1:
+                    logger.warning("LLM error on key %d/%d (%s) — rotating", attempt + 1, len(keys), exc)
                     continue
                 raise
         if last_exc:
@@ -104,13 +102,16 @@ class LLMClient:
         return ""
 
     def complete_for_cross_kg(self, messages: list[dict], temperature: float | None = None) -> str:
-        """Cross KG path — prefers OPENROUTER_API_KEY_PROVIDER_2, then falls back to pool."""
+        """Cross KG path — prefers OPENROUTER_API_KEY_2, then falls back to pool."""
         keys = get_keys_for_cross_kg()
         if not keys:
             # Fallback to regular path
             return self.complete(messages, temperature)
         # Use cross_kg_model if configured
         model_override = getattr(settings.llm, "cross_kg_model", None)
+        if model_override and not model_override.startswith("openrouter/") and ("/" in model_override):
+            model_override = f"openrouter/{model_override}"
+
         last_exc: Exception | None = None
         for attempt, key in enumerate(keys):
             try:
@@ -125,8 +126,8 @@ class LLMClient:
                 return content
             except Exception as exc:
                 last_exc = exc
-                if is_rate_limit_error(exc) and attempt < len(keys) - 1:
-                    logger.warning("Cross-KG LLM rate-limited on key %d/%d (provider_2 first) — rotating", attempt + 1, len(keys))
+                if attempt < len(keys) - 1:
+                    logger.warning("Cross-KG LLM error on key %d/%d (%s) — rotating", attempt + 1, len(keys), exc)
                     continue
                 raise
         if last_exc:

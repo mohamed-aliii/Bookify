@@ -9,12 +9,20 @@ _next_index = 0
 _CANDIDATE_ENVS = ["OPENROUTER_API_KEY"] + [f"OPENROUTER_API_KEY_{i}" for i in range(2, 11)] + ["OPENROUTER_API_KEY_PROVIDER_2"]
 
 
+def _is_valid_api_key(key: str | None) -> bool:
+    """Validate that a string looks like an OpenRouter API key and not a model name or empty string."""
+    if not key:
+        return False
+    k = key.strip().strip('"').strip("'")
+    if "/" in k or " " in k or len(k) < 20:
+        return False
+    return k.startswith("sk-") or len(k) >= 30
+
+
 def collect_openrouter_keys() -> List[str]:
     """Collect all configured OpenRouter keys from environment (loaded via .env).
 
-    Deduplicates, preserves order, ignores empty values.
-    Does NOT read .env file directly — relies on os.environ already populated
-    by config.load_dotenv.
+    Deduplicates, preserves order, ignores empty values and invalid strings (like model names).
     """
     from .config import settings  # local import to avoid cycle at module load
 
@@ -24,7 +32,7 @@ def collect_openrouter_keys() -> List[str]:
         val = os.getenv(env_name)
         if val:
             val = val.strip().strip('"').strip("'")
-            if val and val not in seen:
+            if _is_valid_api_key(val) and val not in seen:
                 keys.append(val)
                 seen.add(val)
 
@@ -34,8 +42,7 @@ def collect_openrouter_keys() -> List[str]:
         val = os.getenv(custom)
         if val:
             val = val.strip().strip('"').strip("'")
-            if val and val not in seen:
-                # custom primary should be tried first
+            if _is_valid_api_key(val) and val not in seen:
                 keys.insert(0, val)
                 seen.add(val)
     return keys
@@ -57,15 +64,13 @@ def get_keys_in_rotation_order() -> List[str]:
 
 
 def get_cross_kg_key() -> str | None:
-    """Dedicated key for cross-material KG. Prefers OPENROUTER_API_KEY_PROVIDER_2."""
-    # Highest priority: explicit provider alias
-    for env_name in ["OPENROUTER_API_KEY_PROVIDER_2", "OPENROUTER_API_KEY_2"]:
+    """Dedicated key for cross-material KG. Prefers OPENROUTER_API_KEY_2."""
+    for env_name in ["OPENROUTER_API_KEY_2", "OPENROUTER_API_KEY_PROVIDER_2"]:
         val = os.getenv(env_name)
         if val:
             val = val.strip().strip('"').strip("'")
-            if val:
+            if _is_valid_api_key(val):
                 return val
-    # Fallback to first key in rotation pool
     keys = collect_openrouter_keys()
     return keys[0] if keys else None
 
@@ -76,10 +81,7 @@ def get_keys_for_cross_kg() -> List[str]:
     if not provider_key:
         return get_keys_in_rotation_order()
     all_keys = collect_openrouter_keys()
-    # Put provider key first, then remaining in rotation order (excluding duplicate)
     remaining = [k for k in all_keys if k != provider_key]
-    # Also include rotation ordering for remaining
-    # Simple: provider first, then round-robin remainder starting from next index
     return [provider_key] + remaining
 
 
