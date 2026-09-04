@@ -42,6 +42,29 @@ function masteryLabel(m: number | null): string {
   return 'Weak'
 }
 
+export const BLOOM_COLORS: Record<string, string> = {
+  remember: '#38bdf8',
+  understand: '#34d399',
+  apply: '#f59e0b',
+  analyze: '#c084fc',
+}
+
+export const BLOOM_LABELS: Record<string, string> = {
+  remember: 'Remember',
+  understand: 'Understand',
+  apply: 'Apply',
+  analyze: 'Analyze',
+}
+
+function priorityColor(node: GFNode): string {
+  const isCore = (node.importance || 'core') === 'core'
+  const m = node.mastery
+  if (!isCore) return '#64748b'
+  if (m === null || m < 0.3) return '#f43f5e'
+  if (m < 0.8) return '#facc15'
+  return '#22c55e'
+}
+
 type GFNode = ConceptGraphNode & {
   chapterColor: string
   degree: number
@@ -71,7 +94,7 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
   const [selectedLink, setSelectedLink] = useState<GFLink | null>(null)
   const [mousePos, setMousePos] = useState({ x: 0, y: 0 })
   const [filterRel, setFilterRel] = useState<Set<string>>(new Set(Object.keys(REL_COLORS)))
-  const [colorMode, setColorMode] = useState<'chapter' | 'mastery'>('chapter')
+  const [colorMode, setColorMode] = useState<'chapter' | 'mastery' | 'priority'>('chapter')
   const [autoRotate, setAutoRotate] = useState(false)
   const [focusChapter, setFocusChapter] = useState<number | null>(null)
   const [query, setQuery] = useState('')
@@ -446,12 +469,20 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
           <div className="h-5 w-px bg-white/10 hidden sm:block" />
 
           <button
-            onClick={() => setColorMode(m => m === 'chapter' ? 'mastery' : 'chapter')}
-            className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-slate-300 hover:bg-white/[0.06] hover:text-white"
-            title="Toggle coloring"
+            onClick={() => setColorMode(m => m === 'chapter' ? 'mastery' : m === 'mastery' ? 'priority' : 'chapter')}
+            className={`rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+              colorMode === 'priority'
+                ? 'border-amber-500/30 bg-amber-500/15 text-amber-300'
+                : 'border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06] hover:text-white'
+            }`}
+            title="Toggle coloring: Chapter -> Mastery -> Learning Priority"
           >
-            <span className="hidden sm:inline">{colorMode === 'chapter' ? 'By Chapter' : 'By Mastery'}</span>
-            <span className="sm:hidden">{colorMode === 'chapter' ? 'Chapters' : 'Mastery'}</span>
+            <span className="hidden sm:inline">
+              {colorMode === 'chapter' ? 'By Chapter' : colorMode === 'mastery' ? 'By Mastery' : 'By Priority'}
+            </span>
+            <span className="sm:hidden">
+              {colorMode === 'chapter' ? 'Chapters' : colorMode === 'mastery' ? 'Mastery' : 'Priority'}
+            </span>
           </button>
 
           <button
@@ -574,8 +605,19 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                     <div className="text-[10px] uppercase tracking-wide text-slate-500">Max hub</div>
                   </div>
                 </div>
-                <div className="mt-2 text-[11px] leading-relaxed text-slate-500">
-                  Larger spheres = more connections. Halo = mastery in Chapter mode.
+                <div className="mt-2 space-y-1 text-[11px] leading-relaxed text-slate-400">
+                  <div className="flex items-center gap-1.5 text-slate-300">
+                    <span className="h-2 w-2 rounded-full bg-amber-400" />
+                    <span><strong>Larger nodes</strong> = Core concepts</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-400">
+                    <span className="h-2 w-2 rounded-full bg-sky-400" />
+                    <span><strong>Colored rings</strong> = Bloom level</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-slate-400">
+                    <span className="text-red-400 font-bold">→</span>
+                    <span><strong>Arrows</strong> = Prerequisite sequence</span>
+                  </div>
                 </div>
               </div>
             )}
@@ -642,49 +684,79 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                 backgroundColor="rgba(0,0,0,0)"
                 showNavInfo={false}
                 nodeRelSize={3}
-                // size by degree + difficulty — hubs pop at scale
+                // size by importance (core = large, supporting = small) + degree
                 nodeVal={(n: any) => {
-                  const d = (n as GFNode).degree || 0
-                  const base = 5 + (d / maxDegree) * 10 + (n.difficulty || 0.3) * 6
-                  return base
+                  const node = n as GFNode
+                  const isCore = (node.importance || 'core') === 'core'
+                  const d = node.degree || 0
+                  const base = 5 + (d / maxDegree) * 10 + (node.difficulty || 0.3) * 6
+                  return base * (isCore ? 1.4 : 0.75)
                 }}
                 nodeColor={() => '#888'}
                 nodeThreeObject={(node: any) => {
                   const n = node as GFNode
+                  const isCore = (n.importance || 'core') === 'core'
+                  const bloom = n.bloom_level || 'understand'
                   const isMatched = searchIds ? searchIds.has(n.id) : false
                   const isHighlighted = highlightedIds ? highlightedIds.has(n.id) : false
                   const isDimmedSearch = searchIds ? (!searchWithNeighbors?.has(n.id)) : false
                   const isDimmedFocus = focusChapter !== null ? (n.section_id !== focusChapter && !isHighlighted) : false
                   const isDimmed = (searchIds ? isDimmedSearch : false) || isDimmedFocus || (highlightedIds ? !isHighlighted : false)
-                  // size
+
+                  // size based on importance (core vs supporting) and degree/difficulty
+                  const importanceScale = isCore ? 1.35 : 0.85
                   const degNorm = n.degree / maxDegree
-                  const radius = 1.9 + degNorm * 2.4 + (n.difficulty || 0.35) * 1.6
-                  const geo = new THREE.SphereGeometry(radius, 12, 12)
-                  // color logic — use BasicMaterial so it stays vivid even without strong lights
+                  const radius = (1.8 + degNorm * 2.2 + (n.difficulty || 0.35) * 1.4) * importanceScale
+
+                  let geo: THREE.BufferGeometry
+                  if (bloom === 'analyze') {
+                    geo = new THREE.DodecahedronGeometry(radius, 0)
+                  } else if (bloom === 'apply') {
+                    geo = new THREE.OctahedronGeometry(radius, 1)
+                  } else {
+                    geo = new THREE.SphereGeometry(radius, 12, 12)
+                  }
+
+                  // color logic — supports chapter, mastery, priority
                   let color = n.chapterColor
                   if (colorMode === 'mastery') color = masteryColor(n.mastery)
+                  else if (colorMode === 'priority') color = priorityColor(n)
                   else if (isMatched) color = '#ffffff'
-                  const opacity = isDimmed ? 0.18 : isHighlighted || isMatched ? 1 : 0.92
+
+                  const opacity = isDimmed ? 0.16 : isHighlighted || isMatched ? 1 : (!isCore && colorMode === 'priority' ? 0.4 : 0.92)
                   const mat = new THREE.MeshBasicMaterial({
                     color,
                     transparent: true,
                     opacity,
                   } as any)
-                  // subtle emissive for matched handled via opacity + outer glow sphere below
                   const mesh = new THREE.Mesh(geo, mat)
-                  // add outer ring for mastery when in chapter mode and mastery known
+
+                  // Bloom indicator ring
+                  const bloomColor = BLOOM_COLORS[bloom] || '#34d399'
+                  const bloomRingGeo = new THREE.RingGeometry(radius * 1.18, radius * 1.32, 20)
+                  const bloomRingMat = new THREE.MeshBasicMaterial({
+                    color: bloomColor,
+                    transparent: true,
+                    opacity: isDimmed ? 0.12 : 0.85,
+                    side: THREE.DoubleSide,
+                  })
+                  const bloomRing = new THREE.Mesh(bloomRingGeo, bloomRingMat)
+                  bloomRing.rotation.x = Math.PI / 2
+                  mesh.add(bloomRing)
+
+                  // Outer mastery ring in chapter mode
                   if (colorMode === 'chapter' && n.mastery !== null) {
-                    const ringGeo = new THREE.RingGeometry(radius * 1.18, radius * 1.35, 24)
+                    const ringGeo = new THREE.RingGeometry(radius * 1.38, radius * 1.52, 24)
                     const ringMat = new THREE.MeshBasicMaterial({ color: masteryColor(n.mastery), transparent: true, opacity: isDimmed ? 0.15 : 0.9, side: THREE.DoubleSide })
                     const ring = new THREE.Mesh(ringGeo, ringMat)
-                    // orient ring to camera later — just add as child
                     ring.rotation.x = Math.PI / 2
                     mesh.add(ring)
                   }
-                  // make matched nodes slightly larger with glow
+
+                  // Glow on highlighted
                   if (isHighlighted && !isDimmed) {
                     const glowGeo = new THREE.SphereGeometry(radius * 1.25, 10, 10)
-                    const glowMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.12 })
+                    const glowMat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.15 })
                     const glow = new THREE.Mesh(glowGeo, glowMat)
                     mesh.add(glow)
                   }
@@ -707,13 +779,18 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                 }}
                 linkOpacity={0.62}
                 linkVisibility={linkVisibility as any}
+                linkDirectionalArrowLength={(l: any) => (l as any).relationship_type === 'prerequisite' ? 3.5 : 0}
+                linkDirectionalArrowRelPos={0.95}
+                linkDirectionalArrowColor={(l: any) => REL_COLORS[(l as any).relationship_type] || '#ef4444'}
                 linkDirectionalParticles={(l: any) => {
+                  const rel = (l as any).relationship_type
                   const s = (l as any).strength || 0
                   const src = typeof (l as any).source === 'object' ? (l as any).source.id : (l as any).source
                   const tgt = typeof (l as any).target === 'object' ? (l as any).target.id : (l as any).target
                   const isHighlighted = highlightedIds ? (highlightedIds.has(src) && highlightedIds.has(tgt)) : false
                   if (highlightedIds && !isHighlighted) return 0
                   if (searchWithNeighbors && !(searchWithNeighbors.has(src) && searchWithNeighbors.has(tgt))) return 0
+                  if (rel === 'prerequisite') return 2
                   return s >= 0.72 ? 2 : s >= 0.45 ? 1 : 0
                 }}
                 linkDirectionalParticleWidth={1.9}
@@ -735,7 +812,7 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
             {/* Tooltip — fixed, never clipped */}
             {hovered && !hoveredLink && (
               <div
-                className="pointer-events-none fixed z-50 max-w-[320px] rounded-xl border border-white/10 bg-surface-3/95 p-3 shadow-xl backdrop-blur-xl"
+                className="pointer-events-none fixed z-50 max-w-[340px] rounded-xl border border-white/10 bg-surface-3/95 p-3 shadow-xl backdrop-blur-xl"
                 style={{ left: mousePos.x + 14, top: mousePos.y - 10 }}
               >
                 <div className="flex items-start justify-between gap-2">
@@ -744,18 +821,36 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                     {(chapters.find(c => c.id === hovered.section_id)?.title || hovered.section_title || 'Chapter').slice(0, 18)}
                   </span>
                 </div>
-                <div className="mt-1 text-xs leading-relaxed text-slate-400 line-clamp-3">{hovered.description}</div>
-                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-500">Degree {degreeMap.get(hovered.id) || 0}</span>
+
+                <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                  <span className={`rounded px-1.5 py-0.5 font-medium uppercase tracking-wider ${(hovered.importance || 'core') === 'core' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-slate-700/50 text-slate-400'}`}>
+                    {hovered.importance || 'core'}
+                  </span>
+                  <span className="rounded px-1.5 py-0.5 font-medium capitalize" style={{ backgroundColor: (BLOOM_COLORS[hovered.bloom_level || 'understand'] || '#34d399') + '25', color: BLOOM_COLORS[hovered.bloom_level || 'understand'] || '#34d399' }}>
+                    {BLOOM_LABELS[hovered.bloom_level || 'understand'] || hovered.bloom_level || 'Understand'}
+                  </span>
                   {hovered.mastery !== null && (
                     <span className="rounded px-1.5 py-0.5 text-white" style={{ backgroundColor: masteryColor(hovered.mastery) + 'DD' }}>
                       {masteryLabel(hovered.mastery)} {Math.round(hovered.mastery * 100)}%
                     </span>
                   )}
-                  <span className="ml-auto text-[11px] text-slate-500">{hovered.section_title.slice(0, 28)}</span>
+                </div>
+
+                <div className="mt-1.5 text-xs leading-relaxed text-slate-300 line-clamp-3">{hovered.description}</div>
+
+                {hovered.why_it_matters && (
+                  <div className="mt-2 rounded-lg bg-amber-500/10 p-2 text-[11px] leading-relaxed text-amber-200 border border-amber-500/20">
+                    <span className="font-semibold text-amber-300">Why it matters: </span>
+                    {hovered.why_it_matters}
+                  </div>
+                )}
+
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5 border-t border-white/5 pt-1.5 text-[11px] text-slate-500">
+                  <span>Degree {degreeMap.get(hovered.id) || 0}</span>
+                  <span className="truncate max-w-[18ch]">{hovered.section_title.slice(0, 28)}</span>
                 </div>
                 {adjacency.get(hovered.id) && adjacency.get(hovered.id)!.size > 0 && (
-                  <div className="mt-2 border-t border-white/5 pt-2 text-[11px] text-slate-500">
+                  <div className="mt-1.5 border-t border-white/5 pt-1.5 text-[11px] text-slate-500">
                     Connected to {adjacency.get(hovered.id)!.size} concept{adjacency.get(hovered.id)!.size === 1 ? '' : 's'} — click to pin.
                   </div>
                 )}
@@ -895,15 +990,31 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                     <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: chapterColor.get(selected.section_id) || '#8b5cf6' }} />
                     <h3 className="truncate text-sm font-semibold text-slate-100">{selected.name}</h3>
                   </div>
-                  <p className="mt-1 line-clamp-4 text-xs leading-relaxed text-slate-400">{detail?.description || selected.description}</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-500">{selected.section_title}</span>
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-500">Diff {selected.difficulty?.toFixed(1) ?? '—'}</span>
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                    <span className={`rounded px-1.5 py-0.5 font-medium uppercase tracking-wider ${(detail?.importance || selected.importance || 'core') === 'core' ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30' : 'bg-slate-700/50 text-slate-400'}`}>
+                      {detail?.importance || selected.importance || 'core'}
+                    </span>
+                    <span className="rounded px-1.5 py-0.5 font-medium capitalize" style={{ backgroundColor: (BLOOM_COLORS[detail?.bloom_level || selected.bloom_level || 'understand'] || '#34d399') + '25', color: BLOOM_COLORS[detail?.bloom_level || selected.bloom_level || 'understand'] || '#34d399' }}>
+                      {BLOOM_LABELS[detail?.bloom_level || selected.bloom_level || 'understand'] || selected.bloom_level || 'Understand'}
+                    </span>
+                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-400">Diff {(selected.difficulty ?? 0.5).toFixed(1)}</span>
                     {selected.mastery !== null && (
                       <span className="rounded px-1.5 py-0.5 font-medium text-white" style={{ backgroundColor: masteryColor(selected.mastery) }}>
                         {masteryLabel(selected.mastery)} · {Math.round(selected.mastery * 100)}%
                       </span>
                     )}
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-slate-300">{detail?.description || selected.description}</p>
+                  {(detail?.why_it_matters || selected.why_it_matters) && (
+                    <div className="mt-3 rounded-xl border border-amber-500/20 bg-amber-500/10 p-3">
+                      <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                        <span>💡 Why It Matters</span>
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-amber-100">{detail?.why_it_matters || selected.why_it_matters}</p>
+                    </div>
+                  )}
+                  <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-slate-500">{selected.section_title}</span>
                   </div>
                 </div>
                 <button

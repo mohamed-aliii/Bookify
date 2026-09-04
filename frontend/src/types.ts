@@ -293,6 +293,9 @@ export interface ConceptGraphNode {
   description: string
   difficulty: number
   mastery: number | null
+  importance?: string
+  bloom_level?: string
+  why_it_matters?: string
   section_id: number
   section_title: string
   book_id?: number | null

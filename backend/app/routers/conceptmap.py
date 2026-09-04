@@ -65,6 +65,9 @@ def get_concept_graph(book_id: int, db: Session = Depends(get_db)):
                 description=kp.description,
                 difficulty=kp.difficulty,
                 mastery=ukp.mastery if ukp else None,
+                importance=getattr(kp, "importance", "core") or "core",
+                bloom_level=getattr(kp, "bloom_level", "understand") or "understand",
+                why_it_matters="",
                 section_id=kp.section_id,
                 section_title=section.title if section else "",
                 book_id=kp.book_id,
@@ -96,6 +99,9 @@ def get_concept_graph(book_id: int, db: Session = Depends(get_db)):
             description=c.canonical_description,
             difficulty=c.difficulty,
             mastery=ukp.mastery if ukp else None,
+            importance=c.importance or "core",
+            bloom_level=c.bloom_level or "understand",
+            why_it_matters=c.why_it_matters or "",
             section_id=primary.section_id if primary else 0,
             section_title=section.title if section else (primary.section_title_snapshot if primary else ""),
             book_id=book_id,
@@ -139,7 +145,7 @@ class GraphExtractRequest(BaseModel):
 
 @router.post("/books/{book_id}/concept-graph/extract")
 def extract_concept_edges(book_id: int, body: GraphExtractRequest, db: Session = Depends(get_db)):
-    _load_book(db, book_id)
+    book = _load_book(db, book_id)
 
     if not body.force:
         existing = db.scalar(select(ConceptEdge).where(ConceptEdge.source_point_id.in_(
@@ -159,11 +165,21 @@ def extract_concept_edges(book_id: int, body: GraphExtractRequest, db: Session =
         raise HTTPException(status_code=400, detail="Need at least 2 knowledge points to extract relationships")
 
     kp_map = {kp.id: kp for kp in kps}
-    kp_list = "\n".join(f"- ID {kp.id}: {kp.name} — {kp.description}" for kp in kps)
+    mid = max(1, len(kps) // 2)
+    first_half = kps[:mid]
+    second_half = kps[mid:]
+    exist_list = "\n".join(f"- ID {kp.id}: {kp.name} — {kp.description}" for kp in first_half)
+    new_list = "\n".join(f"- ID {kp.id}: {kp.name} — {kp.description}" for kp in second_half)
 
-    book = db.get(Book, book_id)
+    prompt_subs = {
+        "chapter_title": book.title,
+        "new_concepts_list": new_list,
+        "existing_concepts_list": exist_list,
+        "chapter_excerpts": "Comprehensive synthesis across all book chapters.",
+    }
+
     messages = [
-        {"role": "system", "content": _prompt_text("concept_edges.txt", {"book_title": book.title, "knowledge_points_list": kp_list})},
+        {"role": "system", "content": _prompt_text("concept_edges.txt", prompt_subs)},
         {"role": "user", "content": "Identify the relationships between these knowledge points now."},
     ]
 
@@ -220,13 +236,12 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
     if section is None or section.book_id != book_id:
         raise HTTPException(status_code=404, detail="Section not found")
 
-    from .intelligence import _extract_section_kps
+    from .intelligence import _extract_section_kps, _leaf_sections_for_chapter, _section_all_chunks, _spread
 
     kp_created = _extract_section_kps(db, book_id, section, force=body.force)
     db.commit()
 
     # Deep: collect KPs from all leaf sections under this chapter
-    from ..routers.intelligence import _leaf_sections_for_chapter
     leaf_ids = [lf.id for lf in _leaf_sections_for_chapter(db, book_id, section)]
     if not leaf_ids:
         leaf_ids = [section_id]
@@ -234,19 +249,39 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
     if not section_kp_ids:
         return {"ok": True, "created": 0, "message": "No knowledge points extracted for this chapter"}
 
-    kps = list(db.scalars(select(KnowledgePoint).where(KnowledgePoint.book_id == book_id).order_by(KnowledgePoint.id)))
+    all_kps = list(db.scalars(select(KnowledgePoint).where(KnowledgePoint.book_id == book_id).order_by(KnowledgePoint.id)))
     new_set = set(section_kp_ids)
-    kp_map = {kp.id: kp for kp in kps}
+    existing_kps = [kp for kp in all_kps if kp.id not in new_set]
+    new_kps = [kp for kp in all_kps if kp.id in new_set]
+    kp_map = {kp.id: kp for kp in all_kps}
 
-    def _tag(kp: KnowledgePoint) -> str:
-        return "NEW" if kp.id in new_set else "EXISTING"
+    if not existing_kps:
+        # First chapter: intra-chapter prerequisite edges were created in _extract_section_kps
+        total_edges = db.scalar(select(func.count()).select_from(ConceptEdge).where(
+            ConceptEdge.source_point_id.in_(select(KnowledgePoint.id).where(KnowledgePoint.book_id == book_id))
+        ))
+        return {"ok": True, "kp_created": kp_created, "created": 0, "total_edges": total_edges or 0}
 
-    kp_list = "\n".join(f"- ID {kp.id} [{_tag(kp)}]: {kp.name} — {kp.description}" for kp in kps)
+    new_concepts_list = "\n".join(f"- ID {kp.id}: {kp.name} — {kp.description}" for kp in new_kps)
+    existing_sample = existing_kps if len(existing_kps) <= 40 else existing_kps[-40:]
+    existing_concepts_list = "\n".join(f"- ID {kp.id}: {kp.name} — {kp.description}" for kp in existing_sample)
 
-    book = db.get(Book, book_id)
+    chapter_chunks = []
+    for lid in leaf_ids:
+        chapter_chunks.extend(_section_all_chunks(db, book_id, lid))
+    sample_chunks = _spread(chapter_chunks, 8) if chapter_chunks else []
+    chapter_excerpts = "\n\n".join(c.text[:300] for c in sample_chunks) if sample_chunks else "No additional excerpts."
+
+    prompt_subs = {
+        "chapter_title": section.title,
+        "new_concepts_list": new_concepts_list,
+        "existing_concepts_list": existing_concepts_list,
+        "chapter_excerpts": chapter_excerpts,
+    }
+
     messages = [
-        {"role": "system", "content": _prompt_text("concept_edges.txt", {"book_title": book.title, "knowledge_points_list": kp_list})},
-        {"role": "user", "content": "Identify the relationships now."},
+        {"role": "system", "content": _prompt_text("concept_edges.txt", prompt_subs)},
+        {"role": "user", "content": "Identify the cross-chapter relationships now."},
     ]
 
     try:
@@ -288,6 +323,26 @@ def extract_section_graph(book_id: int, section_id: int, body: SectionGraphExtra
         )
         db.add(edge)
         created += 1
+
+        # Mirror in canonical ConceptRelation if Concepts exist for both
+        src_kp = kp_map[src]
+        tgt_kp = kp_map[tgt]
+        src_cand = db.scalar(select(Concept).where(Concept.canonical_name_norm == src_kp.name.strip().lower()).limit(1))
+        tgt_cand = db.scalar(select(Concept).where(Concept.canonical_name_norm == tgt_kp.name.strip().lower()).limit(1))
+        if src_cand and tgt_cand and src_cand.id != tgt_cand.id:
+            exists_cr = db.scalar(select(ConceptRelation).where(
+                ConceptRelation.source_concept_id == src_cand.id,
+                ConceptRelation.target_concept_id == tgt_cand.id,
+            ).limit(1))
+            if exists_cr is None:
+                db.add(ConceptRelation(
+                    source_concept_id=src_cand.id,
+                    target_concept_id=tgt_cand.id,
+                    relationship_type=rel,
+                    strength=max(0.0, min(1.0, strength)),
+                    explanation_short=explanation[:300],
+                    explanation_long=explanation,
+                ))
 
     db.commit()
     total_edges = db.scalar(select(func.count()).select_from(ConceptEdge).where(
@@ -507,6 +562,9 @@ def get_kp_detail(book_id: int, kp_id: int, db: Session = Depends(get_db)):
             "name": concept.canonical_name,
             "description": concept.canonical_description,
             "difficulty": concept.difficulty,
+            "importance": concept.importance or "core",
+            "bloom_level": concept.bloom_level or "understand",
+            "why_it_matters": concept.why_it_matters or "",
             "mastery": ukp.mastery if ukp else None,
             "section_id": has_mention.section_id,
             "section_title": section.title if section else has_mention.section_title_snapshot,
@@ -560,6 +618,9 @@ def get_kp_detail(book_id: int, kp_id: int, db: Session = Depends(get_db)):
         "name": kp.name,
         "description": kp.description,
         "difficulty": kp.difficulty,
+        "importance": getattr(kp, "importance", "core") or "core",
+        "bloom_level": getattr(kp, "bloom_level", "understand") or "understand",
+        "why_it_matters": "",
         "mastery": ukp.mastery if ukp else None,
         "section_id": kp.section_id,
         "section_title": section.title if section else "",

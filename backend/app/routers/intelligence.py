@@ -180,160 +180,121 @@ def _leaf_sections_for_chapter(db: Session, book_id: int, chapter: Section) -> l
     return leaves
 
 
-def _extract_single_leaf_kps(db: Session, book_id: int, leaf: Section) -> list[dict]:
-    """Extract KPs for a single leaf section, soft 6-30 hint, 50-200w not needed here."""
-    chunks = _section_all_chunks(db, book_id, leaf.id)
-    if not chunks:
-        return []
-    total_chars = sum(len(c.text) for c in chunks)
-    # Soft hint: denser leaves suggest more points, but LLM decides
-    hint_count = max(KP_SOFT_MIN, min(KP_SOFT_MAX, round(total_chars / 1600) if total_chars > 0 else KP_SOFT_MIN))
-    if total_chars < 800:
-        hint_count = max(4, hint_count)  # thin leaf still 4-6
-    hint_text = f"This leaf section '{leaf.title}' has ~{total_chars} chars. Soft guidance: aim for thorough coverage (typically {hint_count} points within {KP_SOFT_MIN}-{KP_SOFT_MAX} per chapter when summed across leaves). No hard cap."
+def _extract_chapter_learning_map(db: Session, book_id: int, chapter: Section) -> list[dict]:
+    """Extract a structured learning map for an entire chapter in a single LLM call.
 
-    # For leaf, use up to 30 excerpts (leaf is small, often all)
-    excerpt_chunks = _spread(chunks, 30)
+    Collects all chunks from all leaf sections under this chapter,
+    then asks the LLM to produce 5-15 high-quality concepts with
+    prerequisites, importance, bloom level, and why-it-matters.
+    """
+    leaves = _leaf_sections_for_chapter(db, book_id, chapter)
+    all_chunks: list[Chunk] = []
+    for leaf in leaves:
+        all_chunks.extend(_section_all_chunks(db, book_id, leaf.id))
+    if not all_chunks:
+        return []
+
+    total_chars = sum(len(c.text) for c in all_chunks)
+    # Soft guidance based on chapter density
+    hint_count = max(5, min(15, round(total_chars / 3000) if total_chars > 0 else 8))
+    hint_text = f"This chapter '{chapter.title}' has ~{total_chars} chars across {len(leaves)} subsections. Aim for {hint_count} concepts (5-15 range)."
+
+    # Use up to 40 spread excerpts to give the LLM full chapter context
+    excerpt_chunks = _spread(all_chunks, 40)
     excerpts = _excerpts_text(excerpt_chunks)
 
     messages = [
         {"role": "system", "content": _prompt_text("knowledge_points_deep.txt", {"hint_text": hint_text})},
-        {"role": "user", "content": f"Excerpts from \"{leaf.title}\" (chapter: leaf):\n\n{excerpts}\n\nExtract knowledge points now."},
+        {"role": "user", "content": f"Chapter: \"{chapter.title}\"\n\n{excerpts}\n\nExtract the learning map now."},
     ]
     try:
         raw = llm_client.complete_for_cross_kg(messages)
         items = _extract_json_array(raw)
         return items
     except Exception as exc:
-        logger.warning("Deep KP extraction failed for leaf %s: %s", leaf.title, exc)
+        logger.warning("Chapter learning map extraction failed for %s: %s", chapter.title, exc)
         return []
 
 
 def _resolve_or_create_concept(
     db: Session,
     book: Book,
-    leaf: Section,
+    section: Section,
     proposed_name: str,
     proposed_desc: str,
     proposed_diff: float,
-    leaf_snippet: str,
+    section_snippet: str,
+    importance: str = "core",
+    bloom_level: str = "understand",
+    why_it_matters: str = "",
 ) -> tuple[int, bool, str]:
-    """
-    Global dedup: try to resolve proposed concept against all existing Concepts.
+    """Global dedup: resolve proposed concept against existing Concepts.
+
+    Uses a tiered strategy:
+    - Exact alias match → duplicate (no LLM)
+    - Cosine ≥ 0.85 with exact/substring name → duplicate (no LLM)
+    - Cosine 0.65-0.85 → LLM adjudication (ambiguous zone)
+    - Cosine < 0.65 → new concept (no LLM)
+
     Returns (concept_id, is_new, decision).
-    Links already-extracted concepts by creating a ConceptMention instead of a duplicate Concept.
     """
     norm = _norm_name(proposed_name)
-    # Fast path: exact normalized name match → check context via LLM
-    # Otherwise embed + cosine recall
+
+    # --- Fast path: alias table match ---
+    alias_hit = db.scalar(select(ConceptAlias).where(ConceptAlias.alias_norm == norm).limit(1))
+    if alias_hit is not None:
+        existing_mention = db.scalar(select(ConceptMention).where(
+            ConceptMention.concept_id == alias_hit.concept_id,
+            ConceptMention.book_id == book.id,
+            ConceptMention.section_id == section.id,
+        ))
+        if existing_mention is None:
+            db.add(ConceptMention(concept_id=alias_hit.concept_id, book_id=book.id, section_id=section.id, section_title_snapshot=section.title, snippet=section_snippet[:1200]))
+            db.flush()
+        return alias_hit.concept_id, False, "alias_duplicate"
+
+    # --- Embedding recall ---
     existing_concepts = list(db.scalars(select(Concept).order_by(Concept.id)))
     if not existing_concepts:
-        # No concepts yet — create first
-        concept = Concept(
-            canonical_name=proposed_name.strip(),
-            canonical_name_norm=norm,
-            canonical_description=proposed_desc.strip(),
-            difficulty=max(0.0, min(1.0, proposed_diff)),
-        )
-        db.add(concept)
-        db.flush()
-        # provenance
-        db.add(ConceptMention(
-            concept_id=concept.id,
-            book_id=book.id,
-            section_id=leaf.id,
-            section_title_snapshot=leaf.title,
-            snippet=leaf_snippet[:1200],
-        ))
-        db.add(ConceptAlias(concept_id=concept.id, alias_term=proposed_name.strip(), alias_norm=norm, source_book_id=book.id))
-        db.flush()
-        return concept.id, True, "new"
+        return _create_new_concept(db, book, section, proposed_name, norm, proposed_desc, proposed_diff, section_snippet, importance, bloom_level, why_it_matters)
 
-    # Try exact norm match — but still compute embedding similarity to judge context
-    # Don't auto-accept exact as duplicate; let LLM (or fallback) decide context
-    candidates: list[Concept] = []
-    sim_map: dict[int, float] = {}
-    existing_by_id = {c.id: c for c in existing_concepts}
-    # Embed contextual texts for recall (even for exact matches, we need sim to judge context diff)
+    best_sim = 0.0
+    best_cand: Concept | None = None
     try:
-        prop_text = f"[{book.title} | {leaf.title}] {proposed_name}: {proposed_desc} | {leaf_snippet[:400]}"
+        prop_text = f"[{book.title} | {section.title}] {proposed_name}: {proposed_desc}"
         prop_emb = embedding_client.embed_texts([prop_text])[0]
         cand_texts = [f"{c.canonical_name}: {c.canonical_description}" for c in existing_concepts]
         cand_embs: list[list[float]] = []
         for _, batch in embedding_client.embed_batches(cand_texts):
             cand_embs.extend(batch)
-        scored = []
         for c, emb in zip(existing_concepts, cand_embs):
             s = _cosine(prop_emb, emb)
-            sim_map[c.id] = s  # store for all
-            if s >= 0.58:
-                scored.append((s, c))
-        scored.sort(key=lambda x: -x[0])
-        candidates = [c for _, c in scored[:8]]
-        # Ensure exact norm is included even if cosine slightly below 0.58 (so LLM can decide context diff)
-        exact = db.scalar(select(Concept).where(Concept.canonical_name_norm == norm))
-        if exact is not None and exact not in candidates:
-            # include with actual sim (already in sim_map, may be 0.4-0.6)
-            candidates.insert(0, exact)
-            if len(candidates) > 8:
-                candidates = candidates[:8]
-        # Also include substring name matches even if cosine lower
-        if not candidates:
-            for c in existing_concepts:
-                if norm in c.canonical_name_norm or c.canonical_name_norm in norm:
-                    if c not in candidates:
-                        sim_map.setdefault(c.id, 0.55)
-                        candidates.append(c)
-                        if len(candidates) >= 4:
-                            break
+            if s > best_sim:
+                best_sim = s
+                best_cand = c
     except Exception as exc:
         logger.warning("Embedding recall failed for %s: %s", proposed_name, exc)
-        candidates = []
+        # Fallback: exact name match only
         exact = db.scalar(select(Concept).where(Concept.canonical_name_norm == norm))
         if exact is not None:
-            candidates = [exact]
-            sim_map[exact.id] = 1.0
+            best_cand = exact
+            best_sim = 1.0
 
-    if not candidates:
-        # No similar canonical — create new concept
-        concept = Concept(
-            canonical_name=proposed_name.strip(),
-            canonical_name_norm=norm,
-            canonical_description=proposed_desc.strip(),
-            difficulty=max(0.0, min(1.0, proposed_diff)),
-        )
-        db.add(concept)
-        db.flush()
-        db.add(ConceptMention(concept_id=concept.id, book_id=book.id, section_id=leaf.id, section_title_snapshot=leaf.title, snippet=leaf_snippet[:1200]))
-        db.add(ConceptAlias(concept_id=concept.id, alias_term=proposed_name.strip(), alias_norm=norm, source_book_id=book.id))
-        db.flush()
-        return concept.id, True, "new"
+    # --- Tier 1: Clear duplicate (high similarity + name overlap) ---
+    if best_cand is not None and best_sim >= 0.85:
+        is_name_match = (norm == best_cand.canonical_name_norm or
+                         norm in best_cand.canonical_name_norm or
+                         best_cand.canonical_name_norm in norm)
+        if is_name_match:
+            return _link_existing_concept(db, book, section, best_cand, proposed_name, norm, section_snippet)
 
-    # For alias exact match via alias table (covers wording variants)
-    if exact is None:
-        alias_hit = db.scalar(select(ConceptAlias).where(ConceptAlias.alias_norm == norm).limit(1))
-        if alias_hit is not None:
-            # Mentions-only duplicate via alias
-            # ensure not already mentioned in this leaf
-            existing_mention = db.scalar(select(ConceptMention).where(
-                ConceptMention.concept_id == alias_hit.concept_id,
-                ConceptMention.book_id == book.id,
-                ConceptMention.section_id == leaf.id,
-            ))
-            if existing_mention is None:
-                # add mention provenance
-                hit_concept = db.get(Concept, alias_hit.concept_id)
-                db.add(ConceptMention(concept_id=hit_concept.id, book_id=book.id, section_id=leaf.id, section_title_snapshot=leaf.title, snippet=leaf_snippet[:1200]))
-                db.flush()
-            return alias_hit.concept_id, False, "alias_duplicate"
+    # --- Tier 2: Clear new (low similarity) ---
+    if best_cand is None or best_sim < 0.65:
+        return _create_new_concept(db, book, section, proposed_name, norm, proposed_desc, proposed_diff, section_snippet, importance, bloom_level, why_it_matters)
 
-    # LLM adjudication for each candidate (usually 1-3) — pick best
-    best_decision = "unrelated"
-    best_candidate: Concept | None = None
-    best_result: dict | None = None
-    for cand in candidates:
-        # Gather cand provenance for context
-        cand_mentions = list(db.scalars(select(ConceptMention).where(ConceptMention.concept_id == cand.id).limit(3)))
+    # --- Tier 3: Ambiguous zone (0.65-0.85) — use LLM adjudication ---
+    try:
+        cand_mentions = list(db.scalars(select(ConceptMention).where(ConceptMention.concept_id == best_cand.id).limit(3)))
         cand_books = []
         cand_sections = []
         for m in cand_mentions:
@@ -341,273 +302,264 @@ def _resolve_or_create_concept(
             if b:
                 cand_books.append(b.title)
             cand_sections.append(m.section_title_snapshot)
-        cand_snippet = ""
-        if cand_mentions:
-            cand_snippet = (cand_mentions[0].snippet or "")[:400]
-        cand_aliases = ", ".join(a.alias_term for a in db.scalars(select(ConceptAlias).where(ConceptAlias.concept_id == cand.id).limit(5))) or "—"
-        similarity = sim_map.get(cand.id, 0.0)
-        try:
-            prompt = _prompt_text("concept_resolve.txt", {
-                "existing_id": str(cand.id),
-                "existing_name": cand.canonical_name,
-                "existing_desc": cand.canonical_description,
-                "existing_book_title": cand_books[0] if cand_books else "?",
-                "existing_section_title": cand_sections[0] if cand_sections else "?",
-                "existing_snippet": cand_snippet or cand.canonical_description[:400],
-                "existing_aliases": cand_aliases,
-                "proposed_name": proposed_name,
-                "proposed_desc": proposed_desc,
-                "proposed_difficulty": str(proposed_diff),
-                "proposed_book_title": book.title,
-                "proposed_section_title": leaf.title,
-                "proposed_snippet": leaf_snippet[:500],
-                "similarity": f"{similarity:.3f}",
-            })
-            raw = llm_client.complete_for_cross_kg([
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": "Decide now. Return JSON only."},
-            ])
-            result = _extract_json_obj(raw)
-            decision = str(result.get("decision", "unrelated")).strip()
-            # Priority: duplicate > same_term_different_context > distinct_related > unrelated
-            prio = {"duplicate_same_context": 4, "same_term_different_context": 3, "distinct_related": 2, "unrelated": 1}
-            if prio.get(decision, 0) > prio.get(best_decision, 0):
-                best_decision = decision
-                best_candidate = cand
-                best_result = result
-                if decision == "duplicate_same_context":
-                    break
-        except Exception as exc:
-            logger.warning("concept_resolve LLM failed for %s vs %s: %s", proposed_name, cand.canonical_name, exc)
-            # Fallback (no LLM): conservative — avoid merging distinct contexts.
-            # Use embedding similarity + name overlap to decide duplicate vs context-diff vs related.
-            is_exact = (norm == cand.canonical_name_norm)
-            is_substring = (norm in cand.canonical_name_norm or cand.canonical_name_norm in norm)
-            if is_exact:
-                if similarity >= 0.70:
-                    best_decision = "duplicate_same_context"
-                    best_candidate = cand
-                    best_result = {"relationship": None, "strength": 1.0, "explanation_long": "", "explanation_short": "", "alias_term": ""}
-                    break
-                else:
-                    if "unrelated" in best_decision:
-                        best_decision = "same_term_different_context"
-                        best_candidate = cand
-                        best_result = {
-                            "relationship": "contrasts_with" if similarity < 0.60 else "related",
-                            "strength": 0.6,
-                            "explanation_long": f"Both use the term '{proposed_name}' but in different technical contexts: '{cand.canonical_description[:120]}' vs '{proposed_desc[:120]}'. Surface term overlaps yet constraints differ; keep separate and compare trade-offs. Shared terminology masks distinct abstraction levels.",
-                            "explanation_short": "Same term, different context — keep distinct.",
-                        }
-            elif is_substring:
-                if similarity >= 0.60:
-                    # e.g., "Dot Product" ⊂ "Vector Dot Product" with similar descriptions → duplicate
-                    best_decision = "duplicate_same_context"
-                    best_candidate = cand
-                    best_result = {"relationship": None, "strength": 1.0, "explanation_long": "", "explanation_short": "", "alias_term": ""}
-                    break
-                elif similarity >= 0.45 and "unrelated" in best_decision:
-                    best_decision = "distinct_related"
-                    best_candidate = cand
-                    best_result = {
-                        "relationship": "related",
-                        "strength": similarity,
-                        "explanation_long": f"Concepts '{cand.canonical_name}' and '{proposed_name}' share {similarity:.0%} semantic overlap and overlapping terminology. One extends the other; review shared principle.",
-                        "explanation_short": f"Related via terminology ({similarity:.0%})",
-                    }
-            else:
-                if similarity >= 0.62 and "unrelated" in best_decision:
-                    best_decision = "distinct_related"
-                    best_candidate = cand
-                    best_result = {
-                        "relationship": "related",
-                        "strength": similarity,
-                        "explanation_long": f"Concepts '{cand.canonical_name}' and '{proposed_name}' share {similarity:.0%} semantic overlap in their descriptions. Review both to see shared principle and differing application.",
-                        "explanation_short": f"Related ({similarity:.0%})",
-                    }
-            continue
+        cand_snippet = (cand_mentions[0].snippet or "")[:400] if cand_mentions else best_cand.canonical_description[:400]
+        cand_aliases = ", ".join(a.alias_term for a in db.scalars(select(ConceptAlias).where(ConceptAlias.concept_id == best_cand.id).limit(5))) or "—"
 
-    if best_candidate is not None and best_decision == "duplicate_same_context":
-        # Link — create mention, alias if wording differs
-        exists = db.scalar(select(ConceptMention).where(
-            ConceptMention.concept_id == best_candidate.id,
-            ConceptMention.book_id == book.id,
-            ConceptMention.section_id == leaf.id,
-        ))
-        if exists is None:
-            db.add(ConceptMention(concept_id=best_candidate.id, book_id=book.id, section_id=leaf.id, section_title_snapshot=leaf.title, snippet=leaf_snippet[:1200]))
-        # alias for surface variance
-        if norm != best_candidate.canonical_name_norm:
-            alias_exists = db.scalar(select(ConceptAlias).where(ConceptAlias.concept_id == best_candidate.id, ConceptAlias.alias_norm == norm))
-            if alias_exists is None:
-                db.add(ConceptAlias(concept_id=best_candidate.id, alias_term=proposed_name.strip(), alias_norm=norm, source_book_id=book.id))
-        db.flush()
-        return best_candidate.id, False, "duplicate_same_context"
+        prompt = _prompt_text("concept_resolve.txt", {
+            "existing_id": str(best_cand.id),
+            "existing_name": best_cand.canonical_name,
+            "existing_desc": best_cand.canonical_description,
+            "existing_book_title": cand_books[0] if cand_books else "?",
+            "existing_section_title": cand_sections[0] if cand_sections else "?",
+            "existing_snippet": cand_snippet,
+            "existing_aliases": cand_aliases,
+            "proposed_name": proposed_name,
+            "proposed_desc": proposed_desc,
+            "proposed_difficulty": str(proposed_diff),
+            "proposed_book_title": book.title,
+            "proposed_section_title": section.title,
+            "proposed_snippet": section_snippet[:500],
+            "similarity": f"{best_sim:.3f}",
+        })
+        raw = llm_client.complete_for_cross_kg([
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": "Decide now. Return JSON only."},
+        ])
+        result = _extract_json_obj(raw)
+        decision = str(result.get("decision", "unrelated")).strip()
 
-    if best_candidate is not None and best_decision in ("same_term_different_context", "distinct_related"):
-        # Create new concept, then create typed edge to existing
-        concept = Concept(
-            canonical_name=proposed_name.strip(),
-            canonical_name_norm=norm,
-            canonical_description=proposed_desc.strip(),
-            difficulty=max(0.0, min(1.0, proposed_diff)),
-        )
-        db.add(concept)
-        db.flush()
-        db.add(ConceptMention(concept_id=concept.id, book_id=book.id, section_id=leaf.id, section_title_snapshot=leaf.title, snippet=leaf_snippet[:1200]))
-        db.add(ConceptAlias(concept_id=concept.id, alias_term=proposed_name.strip(), alias_norm=norm, source_book_id=book.id))
-        db.flush()
-        # Create relation existing -> new (or reverse if needed — we keep as resolved; LLM says existing prerequisite for proposed)
-        rel_type = str((best_result or {}).get("relationship") or "related").strip()
-        if rel_type not in ("prerequisite", "builds_on", "related", "contrasts_with", "analogous"):
-            rel_type = "related"
-        strength = float((best_result or {}).get("strength") or 0.5)
-        expl_long = str((best_result or {}).get("explanation_long") or "").strip()[:2000]
-        expl_short = str((best_result or {}).get("explanation_short") or "").strip()[:500]
-        # Deduplicate edge pair
-        a, b = best_candidate.id, concept.id
-        src, tgt = (a, b) if a < b else (b, a)  # store ordered pair to avoid duplicates, but keep semantic direction in evidence
-        existing_rel = db.scalar(select(ConceptRelation).where(
-            or_(
-                (ConceptRelation.source_concept_id == src) & (ConceptRelation.target_concept_id == tgt),
-                (ConceptRelation.source_concept_id == tgt) & (ConceptRelation.target_concept_id == src),
-            )
-        ))
-        # Actually check both orientations — we want no duplicate, regardless of order
-        if existing_rel is None:
-            # Preserve intended direction: if LLM said prerequisite/builds_on existing→proposed, keep that; otherwise use ordered
-            # For simplicity store as LLM intended if a==best_candidate.id, else swap
-            if best_candidate.id == a:
-                src_dir, tgt_dir = best_candidate.id, concept.id
-            else:
-                # candidate was tgt in ordered — reverse to intended
-                src_dir, tgt_dir = best_candidate.id, concept.id
-            evidence = json.dumps({
-                "source_section": best_candidate.canonical_name,
-                "target_section": leaf.title,
-                "candidate_provenance_book": (db.get(Book, best_candidate.id) and "") or "",
-                "similarity": sim_map.get(best_candidate.id, 0.0),
-            })
-            db.add(ConceptRelation(
-                source_concept_id=src_dir,
-                target_concept_id=tgt_dir,
-                relationship_type=rel_type,
-                strength=max(0.0, min(1.0, strength)),
-                explanation_long=expl_long,
-                explanation_short=expl_short,
-                evidence_json=evidence,
+        if decision == "duplicate_same_context":
+            return _link_existing_concept(db, book, section, best_cand, proposed_name, norm, section_snippet)
+
+        if decision in ("same_term_different_context", "distinct_related"):
+            concept_id, _, _ = _create_new_concept(db, book, section, proposed_name, norm, proposed_desc, proposed_diff, section_snippet, importance, bloom_level, why_it_matters)
+            # Create typed relation
+            rel_type = str(result.get("relationship") or "related").strip()
+            if rel_type not in ("prerequisite", "builds_on", "related", "contrasts_with", "analogous"):
+                rel_type = "related"
+            strength = float(result.get("strength") or 0.5)
+            expl_long = str(result.get("explanation_long") or "").strip()[:2000]
+            expl_short = str(result.get("explanation_short") or "").strip()[:500]
+            existing_rel = db.scalar(select(ConceptRelation).where(
+                or_(
+                    (ConceptRelation.source_concept_id == best_cand.id) & (ConceptRelation.target_concept_id == concept_id),
+                    (ConceptRelation.source_concept_id == concept_id) & (ConceptRelation.target_concept_id == best_cand.id),
+                )
             ))
-            db.flush()
-        return concept.id, True, best_decision
+            if existing_rel is None:
+                db.add(ConceptRelation(
+                    source_concept_id=best_cand.id,
+                    target_concept_id=concept_id,
+                    relationship_type=rel_type,
+                    strength=max(0.0, min(1.0, strength)),
+                    explanation_long=expl_long,
+                    explanation_short=expl_short,
+                ))
+                db.flush()
+            return concept_id, True, decision
 
-    # unrelated or no candidate → create new concept isolated
+    except Exception as exc:
+        logger.warning("concept_resolve LLM failed for %s vs %s: %s", proposed_name, best_cand.canonical_name, exc)
+
+    # Fallback for ambiguous zone when LLM fails: use name overlap heuristic
+    if norm == best_cand.canonical_name_norm and best_sim >= 0.70:
+        return _link_existing_concept(db, book, section, best_cand, proposed_name, norm, section_snippet)
+
+    return _create_new_concept(db, book, section, proposed_name, norm, proposed_desc, proposed_diff, section_snippet, importance, bloom_level, why_it_matters)
+
+
+def _create_new_concept(
+    db: Session, book: Book, section: Section,
+    name: str, norm: str, desc: str, diff: float, snippet: str,
+    importance: str = "core", bloom_level: str = "understand", why_it_matters: str = "",
+) -> tuple[int, bool, str]:
+    """Create a new Concept + ConceptMention + ConceptAlias."""
     concept = Concept(
-        canonical_name=proposed_name.strip(),
+        canonical_name=name.strip(),
         canonical_name_norm=norm,
-        canonical_description=proposed_desc.strip(),
-        difficulty=max(0.0, min(1.0, proposed_diff)),
+        canonical_description=desc.strip(),
+        difficulty=max(0.0, min(1.0, diff)),
+        importance=importance,
+        bloom_level=bloom_level,
+        why_it_matters=why_it_matters,
     )
     db.add(concept)
     db.flush()
-    db.add(ConceptMention(concept_id=concept.id, book_id=book.id, section_id=leaf.id, section_title_snapshot=leaf.title, snippet=leaf_snippet[:1200]))
-    db.add(ConceptAlias(concept_id=concept.id, alias_term=proposed_name.strip(), alias_norm=norm, source_book_id=book.id))
+    db.add(ConceptMention(concept_id=concept.id, book_id=book.id, section_id=section.id, section_title_snapshot=section.title, snippet=snippet[:1200]))
+    db.add(ConceptAlias(concept_id=concept.id, alias_term=name.strip(), alias_norm=norm, source_book_id=book.id))
     db.flush()
-    return concept.id, True, "new_unrelated"
+    return concept.id, True, "new"
+
+
+def _link_existing_concept(
+    db: Session, book: Book, section: Section,
+    existing: Concept, proposed_name: str, norm: str, snippet: str,
+) -> tuple[int, bool, str]:
+    """Link to an existing Concept by adding a ConceptMention (+ alias if name differs)."""
+    exists = db.scalar(select(ConceptMention).where(
+        ConceptMention.concept_id == existing.id,
+        ConceptMention.book_id == book.id,
+        ConceptMention.section_id == section.id,
+    ))
+    if exists is None:
+        db.add(ConceptMention(concept_id=existing.id, book_id=book.id, section_id=section.id, section_title_snapshot=section.title, snippet=snippet[:1200]))
+    if norm != existing.canonical_name_norm:
+        alias_exists = db.scalar(select(ConceptAlias).where(ConceptAlias.concept_id == existing.id, ConceptAlias.alias_norm == norm))
+        if alias_exists is None:
+            db.add(ConceptAlias(concept_id=existing.id, alias_term=proposed_name.strip(), alias_norm=norm, source_book_id=book.id))
+    db.flush()
+    return existing.id, False, "duplicate_same_context"
 
 
 def _extract_section_kps(db: Session, book_id: int, section: Section, force: bool = False) -> int:
-    """Deep section-by-section extraction with GLOBAL dedup via Concept/ConceptMention.
+    """Extract a structured learning map for an entire chapter.
 
-    Links already-extracted concepts: a proposed KP that matches an existing canonical
-    creates a ConceptMention (provenance) instead of a duplicate Concept row.
-    Only novel meanings (context-different) create new Concept rows.
+    1. Single LLM call produces 5-15 concepts with importance, bloom_level, prerequisites, why_it_matters.
+    2. Concepts are resolved globally (Tier 1 alias/exact cosine dedup, Tier 2 new concept, Tier 3 LLM adjudication).
+    3. Prerequisite edges are created automatically from the `prerequisites` field.
+    4. Legacy KnowledgePoint and ConceptEdge tables are kept in sync for backward compatibility.
     """
-    from ..models import Section as SectionModel
-
     book = db.get(Book, book_id)
     if book is None:
         return 0
+
     leaves = _leaf_sections_for_chapter(db, book_id, section)
+    if not leaves:
+        leaves = [section]
+
+    leaf_ids = [lf.id for lf in leaves]
+
     if not force:
-        # Skip chapter if all leaves already have at least one ConceptMention provenance
-        already_done = True
-        for lf in leaves:
-            has_mention = db.scalar(select(ConceptMention).where(ConceptMention.book_id == book_id, ConceptMention.section_id == lf.id).limit(1))
-            if has_mention is None:
-                already_done = False
-                break
-        if already_done:
+        # Skip if chapter leaves already have ConceptMention records
+        has_mention = db.scalar(
+            select(ConceptMention.id)
+            .where(ConceptMention.book_id == book_id, ConceptMention.section_id.in_(leaf_ids))
+            .limit(1)
+        )
+        if has_mention is not None:
             return 0
-        # Also skip if legacy KnowledgePoints exist but no ConceptMention yet — allow migration to create Concepts from them
-        # (force will handle)
 
-    # Collect per leaf: need leaf snippet for context
-    leaf_to_items: dict[int, list[dict]] = {}
-    leaf_snippets: dict[int, str] = {}
-    for leaf in leaves:
-        items = _extract_single_leaf_kps(db, book_id, leaf)
-        if items:
-            leaf_to_items[leaf.id] = items
-            chunks = _section_all_chunks(db, book_id, leaf.id)
-            leaf_snippets[leaf.id] = " ".join(c.text for c in _spread(chunks, 6))[:1200] if chunks else leaf.title
-
-    if not leaf_to_items:
+    # 1. Single LLM call for the chapter
+    items = _extract_chapter_learning_map(db, book_id, section)
+    if not items:
         return 0
 
-    # Flatten dedup within this chapter batch by normalized name (intra-batch)
-    seen_names: set[str] = set()
-    deduped: list[tuple[dict, int]] = []
-    for leaf_id, items in leaf_to_items.items():
-        for it in items:
-            name_norm = _norm_name(str(it.get("name", "")))
-            if not name_norm or name_norm in seen_names:
-                continue
-            seen_names.add(name_norm)
-            deduped.append((it, leaf_id))
+    # Prepare leaf text snippets to associate each concept with the most relevant leaf
+    leaf_snippets: dict[int, str] = {}
+    for leaf in leaves:
+        chunks = _section_all_chunks(db, book_id, leaf.id)
+        leaf_snippets[leaf.id] = " ".join(c.text for c in _spread(chunks, 6))[:1200] if chunks else leaf.title
 
-    if len(deduped) > KP_SOFT_MAX:
-        deduped = deduped[:KP_SOFT_MAX]
+    def _best_leaf(concept_name: str, concept_desc: str) -> Section:
+        tokens = set((concept_name + " " + concept_desc).lower().split())
+        best_lf = leaves[0]
+        best_score = -1
+        for lf in leaves:
+            snip = leaf_snippets.get(lf.id, "").lower()
+            score = sum(1 for t in tokens if len(t) > 3 and t in snip)
+            if score > best_score:
+                best_score = score
+                best_lf = lf
+        return best_lf
 
     concepts_created = 0
-    mentions_created = 0
-    for item, leaf_id in deduped:
+    name_to_concept_id: dict[str, int] = {}
+    name_to_kp_id: dict[str, int] = {}
+    concept_prereqs: dict[int, list[str]] = {}
+
+    for item in items:
         name = str(item.get("name", "")).strip()
         desc = str(item.get("description", "")).strip()
-        diff = float(item.get("difficulty", 0.5))
         if not name or not desc:
             continue
-        leaf = db.get(Section, leaf_id)
-        if leaf is None:
-            continue
-        # Global resolve — may create Concept or just Mention
-        snippet = leaf_snippets.get(leaf_id, "")
-        concept_id, is_new, decision = _resolve_or_create_concept(db, book, leaf, name, desc, diff, snippet)
+
+        diff = float(item.get("difficulty", 0.5))
+        importance = str(item.get("importance", "core")).strip().lower()
+        if importance not in ("core", "supporting"):
+            importance = "core"
+
+        bloom_level = str(item.get("bloom_level", "understand")).strip().lower()
+        if bloom_level not in ("remember", "understand", "apply", "analyze"):
+            bloom_level = "understand"
+
+        why_it_matters = str(item.get("why_it_matters", "")).strip()
+        prereqs = item.get("prerequisites", [])
+        if not isinstance(prereqs, list):
+            prereqs = []
+
+        norm = _norm_name(name)
+        target_leaf = _best_leaf(name, desc)
+        snippet = leaf_snippets.get(target_leaf.id, "")
+
+        concept_id, is_new, _ = _resolve_or_create_concept(
+            db, book, target_leaf, name, desc, diff, snippet,
+            importance=importance, bloom_level=bloom_level, why_it_matters=why_it_matters
+        )
         if is_new:
             concepts_created += 1
-        else:
-            mentions_created += 1
 
-    # Still create legacy KnowledgePoint rows for backward compat (until front fully migrates)
-    # — but only for newly created concepts, to keep legacy KP table from diverging
-    # This block keeps legacy KP in sync: one KP per new ConceptMention in this book
-    for item, leaf_id in deduped:
-        # We already flushed; ensure legacy KP exists for those is_new
-        # Look up concept for this item to see if it was newly created
-        norm = _norm_name(str(item.get("name", "")))
-        concept = db.scalar(select(Concept).where(Concept.canonical_name_norm == norm))
-        if concept is None:
-            continue
-        # if this leaf already has this concept mention and concept was new, create legacy KP if not exists
-        legacy_exists = db.scalar(select(KnowledgePoint).where(KnowledgePoint.book_id == book_id, KnowledgePoint.section_id == leaf_id, KnowledgePoint.name == str(item.get("name", "")).strip()).limit(1))
-        if legacy_exists is None and concept is not None:
-            # only mirror when the concept has a mention in this leaf (to avoid fabricating)
-            has_mention = db.scalar(select(ConceptMention).where(ConceptMention.concept_id == concept.id, ConceptMention.book_id == book_id, ConceptMention.section_id == leaf_id).limit(1))
-            if has_mention is not None:
-                # check if this concept was the one we just created for this leaf (approx by alias source)
-                alias = db.scalar(select(ConceptAlias).where(ConceptAlias.concept_id == concept.id, ConceptAlias.alias_norm == norm, ConceptAlias.source_book_id == book_id).limit(1))
-                if alias is not None or is_new:
-                    kp = KnowledgePoint(book_id=book_id, section_id=leaf_id, name=str(item.get("name", "")).strip(), description=str(item.get("description", "")).strip(), difficulty=max(0.0, min(1.0, float(item.get("difficulty", 0.5)))))
-                    db.add(kp)
+        name_to_concept_id[norm] = concept_id
+        if prereqs:
+            concept_prereqs[concept_id] = [str(p).strip() for p in prereqs if str(p).strip()]
+
+        # Maintain legacy KnowledgePoint
+        legacy_kp = db.scalar(
+            select(KnowledgePoint)
+            .where(KnowledgePoint.book_id == book_id, KnowledgePoint.section_id == target_leaf.id, KnowledgePoint.name == name)
+            .limit(1)
+        )
+        if legacy_kp is None:
+            legacy_kp = KnowledgePoint(
+                book_id=book_id,
+                section_id=target_leaf.id,
+                name=name,
+                description=desc,
+                difficulty=max(0.0, min(1.0, diff)),
+                importance=importance,
+                bloom_level=bloom_level,
+            )
+            db.add(legacy_kp)
+            db.flush()
+        name_to_kp_id[norm] = legacy_kp.id
+
+    # 3. Create intra-chapter prerequisite relations automatically from prerequisites
+    for target_cid, prereq_list in concept_prereqs.items():
+        for p_name in prereq_list:
+            p_norm = _norm_name(p_name)
+            source_cid = name_to_concept_id.get(p_norm)
+            if source_cid and source_cid != target_cid:
+                exists_cr = db.scalar(select(ConceptRelation).where(
+                    ConceptRelation.source_concept_id == source_cid,
+                    ConceptRelation.target_concept_id == target_cid,
+                ).limit(1))
+                if exists_cr is None:
+                    db.add(ConceptRelation(
+                        source_concept_id=source_cid,
+                        target_concept_id=target_cid,
+                        relationship_type="prerequisite",
+                        strength=0.85,
+                        explanation_short=f"{p_name} is a foundational prerequisite.",
+                        explanation_long=f"Mastering {p_name} provides the necessary conceptual foundation to understand this concept.",
+                    ))
+
+            source_kpid = name_to_kp_id.get(p_norm)
+            target_norm = next((n for n, cid in name_to_concept_id.items() if cid == target_cid), None)
+            target_kpid = name_to_kp_id.get(target_norm) if target_norm else None
+            if source_kpid and target_kpid and source_kpid != target_kpid:
+                exists_ce = db.scalar(select(ConceptEdge).where(
+                    ConceptEdge.source_point_id == source_kpid,
+                    ConceptEdge.target_point_id == target_kpid,
+                ).limit(1))
+                if exists_ce is None:
+                    db.add(ConceptEdge(
+                        source_point_id=source_kpid,
+                        target_point_id=target_kpid,
+                        relationship_type="prerequisite",
+                        strength=0.85,
+                        explanation=f"{p_name} is a foundational prerequisite.",
+                    ))
+
+    db.flush()
     return concepts_created
 
 

@@ -198,6 +198,8 @@ class KnowledgePoint(Base):
     name: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
     difficulty: Mapped[float] = mapped_column(Float, default=0.5)
+    importance: Mapped[str] = mapped_column(String(20), default="core")
+    bloom_level: Mapped[str] = mapped_column(String(20), default="understand")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     book: Mapped[Book] = relationship()
@@ -471,6 +473,9 @@ class Concept(Base):
     canonical_name_norm: Mapped[str] = mapped_column(String(300), index=True)
     canonical_description: Mapped[str] = mapped_column(Text)
     difficulty: Mapped[float] = mapped_column(Float, default=0.5)
+    importance: Mapped[str] = mapped_column(String(20), default="core")
+    bloom_level: Mapped[str] = mapped_column(String(20), default="understand")
+    why_it_matters: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
