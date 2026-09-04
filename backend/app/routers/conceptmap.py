@@ -388,7 +388,6 @@ def delete_book_concept_graph(book_id: int, db: Session = Depends(get_db)):
     mentions_deleted = db.execute(sa_delete(CM).where(CM.book_id == book_id)).rowcount or 0
 
     legacy_kp_ids = list(db.scalars(select(KnowledgePoint.id).where(KnowledgePoint.book_id == book_id)))
-    legacy_kps_deleted = db.execute(sa_delete(KnowledgePoint).where(KnowledgePoint.book_id == book_id)).rowcount or 0
     legacy_edges_deleted = 0
     if legacy_kp_ids:
         for eid in list(db.scalars(select(ConceptEdge.id).where((ConceptEdge.source_point_id.in_(legacy_kp_ids)) | (ConceptEdge.target_point_id.in_(legacy_kp_ids))))):
@@ -396,6 +395,8 @@ def delete_book_concept_graph(book_id: int, db: Session = Depends(get_db)):
             if obj:
                 db.delete(obj)
                 legacy_edges_deleted += 1
+        db.flush()
+    legacy_kps_deleted = db.execute(sa_delete(KnowledgePoint).where(KnowledgePoint.book_id == book_id)).rowcount or 0
 
     orphan_concepts = 0
     orphan_relations = 0
