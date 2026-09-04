@@ -1,6 +1,10 @@
+import logging
 from collections.abc import Iterator
 
 from .config import settings
+from .openrouter_rotation import get_keys_in_rotation_order, is_rate_limit_error
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingClient:
@@ -29,8 +33,26 @@ class EmbeddingClient:
     def _embed_api(self, texts: list[str]) -> list[list[float]]:
         import litellm
 
-        response = litellm.embedding(model=settings.embeddings.model, input=texts, timeout=60)
-        return [item["embedding"] for item in response.data]
+        keys = get_keys_in_rotation_order()
+        # If no rotation keys, try once with default env
+        if not keys:
+            response = litellm.embedding(model=settings.embeddings.model, input=texts, timeout=60)
+            return [item["embedding"] for item in response.data]
+
+        last_exc: Exception | None = None
+        for attempt, key in enumerate(keys):
+            try:
+                response = litellm.embedding(model=settings.embeddings.model, input=texts, timeout=60, api_key=key)
+                return [item["embedding"] for item in response.data]
+            except Exception as exc:
+                last_exc = exc
+                if is_rate_limit_error(exc) and attempt < len(keys) - 1:
+                    logger.warning("Embedding rate-limited on key %d/%d — rotating", attempt + 1, len(keys))
+                    continue
+                raise
+        if last_exc:
+            raise last_exc
+        return []
 
     def _embed_local(self, texts: list[str]) -> list[list[float]]:
         if self._local_model is None:
