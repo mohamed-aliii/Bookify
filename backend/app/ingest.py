@@ -288,6 +288,7 @@ def ingest_book(book_id: int) -> None:
             from .models import (
                 ChatSession,
                 CodeBlock,
+                ConceptMention,
                 Flashcard,
                 KnowledgePoint,
                 Note,
@@ -299,6 +300,7 @@ def ingest_book(book_id: int) -> None:
                 VocabWord,
             )
             db.execute(delete(Chunk).where(Chunk.book_id == book.id))
+            db.execute(delete(ConceptMention).where(ConceptMention.section_id.in_(old_sec_ids)))
             db.execute(delete(Flashcard).where(Flashcard.section_id.in_(old_sec_ids)))
             db.execute(delete(QuizAttempt).where(QuizAttempt.section_id.in_(old_sec_ids)))
             db.execute(delete(QuizError).where(QuizError.section_id.in_(old_sec_ids)))
@@ -310,6 +312,7 @@ def ingest_book(book_id: int) -> None:
             db.execute(delete(Note).where(Note.section_id.in_(old_sec_ids)))
             db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id.in_(old_sec_ids)))
             db.execute(delete(Notebook).where(Notebook.section_id.in_(old_sec_ids)))
+            db.execute(update(Section).where(Section.book_id == book.id).values(parent_id=None))
             db.execute(delete(Section).where(Section.book_id == book.id))
             db.flush()
 
