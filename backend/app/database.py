@@ -117,6 +117,24 @@ def init_db() -> None:
         if "is_code" not in ccolumns:
             conn.execute(text("ALTER TABLE chunks ADD COLUMN is_code BOOLEAN NOT NULL DEFAULT 0"))
 
+        ec_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(concept_edges)"))}
+        if "explanation" not in ec_columns:
+            conn.execute(text("ALTER TABLE concept_edges ADD COLUMN explanation TEXT NOT NULL DEFAULT ''"))
+
+        kp_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(knowledge_points)"))}
+        if "importance" not in kp_columns:
+            conn.execute(text("ALTER TABLE knowledge_points ADD COLUMN importance VARCHAR(20) NOT NULL DEFAULT 'core'"))
+        if "bloom_level" not in kp_columns:
+            conn.execute(text("ALTER TABLE knowledge_points ADD COLUMN bloom_level VARCHAR(20) NOT NULL DEFAULT 'understand'"))
+
+        c_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(concepts)"))}
+        if "importance" not in c_columns:
+            conn.execute(text("ALTER TABLE concepts ADD COLUMN importance VARCHAR(20) NOT NULL DEFAULT 'core'"))
+        if "bloom_level" not in c_columns:
+            conn.execute(text("ALTER TABLE concepts ADD COLUMN bloom_level VARCHAR(20) NOT NULL DEFAULT 'understand'"))
+        if "why_it_matters" not in c_columns:
+            conn.execute(text("ALTER TABLE concepts ADD COLUMN why_it_matters TEXT NOT NULL DEFAULT ''"))
+
     _drop_notebooks_book_id_unique()
 
     _backup_db()

@@ -137,7 +137,7 @@ export default function SlideViewer({ pdfUrl, initialPage = 1, jumpToPage, onPag
           const msg = e instanceof Error ? e.message : String(e)
           // 404 for slides without PDF preview
           if (msg.includes('404') || msg.includes('Missing PDF')) {
-            setError('Slide preview PDF not available. Install LibreOffice and re-upload, or use Text view.')
+            setError('Slide preview is generating or not available. Please wait a moment and refresh, or switch to Text view.')
           } else {
             setError(msg || 'Failed to load slides')
           }

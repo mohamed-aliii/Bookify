@@ -172,6 +172,7 @@ async def upload_book(
                     num_pages = doc.page_count
             except Exception:
                 pass
+        viewer_path = str(dest_pdf) if pdf_ready else str(dest_pptx)
         book = Book(
             title=Path(file.filename).stem,
             filename=file.filename,
@@ -550,19 +551,40 @@ def serve_pdf(book_id: int, db: Session = Depends(get_db)):
     if book is None:
         raise HTTPException(status_code=404, detail="Book not found")
     path = Path(book.path)
-    # For slides, path may be PPTX if LibreOffice was unavailable; try sibling PDF
-    if getattr(book, "content_type", "book") == "slides":
+    # For slides, path may be PPTX; convert to sibling PDF if needed
+    if getattr(book, "content_type", "book") == "slides" or path.suffix.lower() == ".pptx":
         if path.suffix.lower() == ".pptx":
             pdf_sibling = path.with_suffix(".pdf")
+            if not pdf_sibling.exists():
+                try:
+                    from ..pptx_converter import convert_pptx_to_pdf
+
+                    convert_pptx_to_pdf(path, path.parent)
+                except Exception as e:
+                    logger.warning("On-demand PPTX to PDF conversion failed: %s", e)
             if pdf_sibling.exists():
                 path = pdf_sibling
+                if book.path != str(path):
+                    book.path = str(path)
+                    try:
+                        import fitz
+
+                        with fitz.open(path) as doc:
+                            book.num_pages = doc.page_count
+                        db.commit()
+                    except Exception:
+                        pass
             else:
-                raise HTTPException(status_code=404, detail="Slide preview PDF not available. Install LibreOffice and re-upload as PDF, or view slides as text.")
-        if not path.exists():
-            # try PPTX sibling's PDF
-            alt = path.with_suffix(".pdf")
-            if alt.exists():
-                path = alt
+                raise HTTPException(status_code=404, detail="Slide preview PDF could not be generated.")
+        elif not path.exists():
+            pptx_sib = path.with_suffix(".pptx")
+            if pptx_sib.exists():
+                try:
+                    from ..pptx_converter import convert_pptx_to_pdf
+
+                    convert_pptx_to_pdf(pptx_sib, pptx_sib.parent)
+                except Exception as e:
+                    logger.warning("On-demand PPTX conversion failed: %s", e)
     if not path.exists():
         raise HTTPException(status_code=404, detail="PDF file not found on disk")
     return FileResponse(
@@ -580,12 +602,19 @@ def serve_cover(book_id: int, db: Session = Depends(get_db)):
 
     cover_path = Path(book.cover_path) if book.cover_path else None
     if cover_path is None or not cover_path.exists():
-        # Resolve a PDF path for cover (slides store PPTX+sibling PDF)
         src_path = Path(book.path) if book.path else None
-        if src_path and getattr(book, "content_type", "book") == "slides" and src_path.suffix.lower() == ".pptx":
-            pdf_sib = src_path.with_suffix(".pdf")
-            if pdf_sib.exists():
-                src_path = pdf_sib
+        if src_path and (getattr(book, "content_type", "book") == "slides" or src_path.suffix.lower() == ".pptx"):
+            if src_path.suffix.lower() == ".pptx":
+                pdf_sib = src_path.with_suffix(".pdf")
+                if not pdf_sib.exists():
+                    try:
+                        from ..pptx_converter import convert_pptx_to_pdf
+
+                        convert_pptx_to_pdf(src_path, src_path.parent)
+                    except Exception:
+                        pass
+                if pdf_sib.exists():
+                    src_path = pdf_sib
         if src_path and src_path.exists() and src_path.suffix.lower() == ".pdf":
             from ..ingest import extract_cover
 

@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .config import ensure_dirs
 from .database import init_db
 from .kernel_manager import kernel_manager
-from .routers import books, chat, conceptmap, courses, crossbook, export, gamification, intelligence, learning, notes, notebook, playground, progress, read, search, session, settings, study, tts, vocab
+from .routers import books, chat, conceptmap, concepts, courses, crossbook, export, gamification, intelligence, learning, notes, notebook, playground, progress, read, search, session, settings, study, tts, vocab
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -112,6 +112,7 @@ app.include_router(intelligence.router, prefix="/api")
 app.include_router(session.router, prefix="/api")
 app.include_router(tts.router, prefix="/api")
 app.include_router(conceptmap.router, prefix="/api")
+app.include_router(concepts.router, prefix="/api")
 app.include_router(playground.router, prefix="/api")
 app.include_router(notebook.router, prefix="")
 app.include_router(gamification.router, prefix="/api")

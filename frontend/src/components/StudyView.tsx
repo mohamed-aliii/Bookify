@@ -11,7 +11,6 @@ import StudySessionView from './StudySessionView'
 import ConceptGraphView from './ConceptGraph'
 import Notebook from './Notebook'
 import RelatedSections from './RelatedSections'
-import ContentStartPicker from './ContentStartPicker'
 
 type Mode = 'summary' | 'cards' | 'review' | 'quiz' | 'socratic' | 'practice' | 'teachback' | 'understand' | 'weakness' | 'session' | 'graph' | 'playground'
 
@@ -135,14 +134,12 @@ export default function StudyView({
   activeSectionId,
   onSelectSection,
   notebookFocus,
-  onContentStartConfirmed,
 }: {
   bookId: number
   sections: Section[]
   activeSectionId: number | null
   onSelectSection: (id: number) => void
   notebookFocus?: { seq: number; cellId: number; sectionId: number | null } | null
-  onContentStartConfirmed?: () => void
 }) {
   const [mode, setMode] = useState<Mode>('summary')
 
@@ -181,12 +178,6 @@ export default function StudyView({
   const [dueQueue, setDueQueue] = useState<Flashcard[] | null>(null)
   const [reviewFlipped, setReviewFlipped] = useState(false)
   const [reviewBusy, setReviewBusy] = useState(false)
-
-  const [csOpen, setCsOpen] = useState(false)
-
-  const toggleContentStart = () => {
-    setCsOpen((o) => !o)
-  }
 
   const section = sections.find((s) => s.id === activeSectionId) ?? null
 
@@ -359,12 +350,6 @@ export default function StudyView({
             )
           })}
         </select>
-        <button
-          onClick={toggleContentStart}
-          className="shrink-0 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors hover:bg-white/[0.06] hover:text-white"
-        >
-          First chapter
-        </button>
         <div className="ml-auto flex overflow-x-auto no-scrollbar rounded-xl bg-white/[0.03] p-0.5 border border-white/[0.04]">
           {(Object.keys(MODE_LABELS) as Mode[]).map((m) => (
             <button
@@ -386,21 +371,7 @@ export default function StudyView({
         </div>
       </div>
 
-      {csOpen && (
-        <div className="shrink-0 border-b border-white/[0.06] bg-white/[0.015] px-5 py-3">
-          <ContentStartPicker
-            bookId={bookId}
-            onClose={() => setCsOpen(false)}
-            onConfirmed={() => {
-              void loadCards()
-              void loadProgress()
-              onContentStartConfirmed?.()
-            }}
-          />
-        </div>
-      )}
-
-      {progress && progress.cards_total > 0 && (
+      {progress && progress.cards_total > 0 && mode !== 'graph' && mode !== 'playground' && (
         <div className="shrink-0 border-b border-white/[0.06] px-5 py-2">
           <div className="mx-auto flex max-w-3xl items-center gap-3 text-[11px] text-slate-500">
             <div className="h-1 flex-1 overflow-hidden rounded-full bg-slate-800/60">
@@ -417,9 +388,11 @@ export default function StudyView({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className={`min-h-0 flex-1 ${mode === 'graph' || mode === 'playground' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
         {mode === 'playground' ? (
           <Notebook bookId={bookId} sectionId={(notebookFocus?.sectionId ?? activeSectionId) ?? undefined} focus={notebookFocus ?? null} />
+        ) : mode === 'graph' ? (
+          <ConceptGraphView bookId={bookId} />
         ) : (
         <div className="mx-auto max-w-3xl px-5 py-6">
           {!section && (
@@ -765,9 +738,6 @@ export default function StudyView({
             />
           )}
 
-          {mode === 'graph' && (
-            <ConceptGraphView bookId={bookId} />
-          )}
         </div>
         )}
       </div>

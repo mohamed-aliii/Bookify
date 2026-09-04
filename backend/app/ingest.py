@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 
+from sqlalchemy import delete, select
+
 from .chunker import ChunkDraft, SectionDraft, make_chunks
 from .config import settings
 from .embeddings import embedding_client
@@ -63,34 +65,58 @@ def extract_cover(book_path: str, dest_dir: Path | None = None) -> str | None:
 
 
 def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[list[SectionDraft], list[ChunkDraft], int]:
-    """Build slide-aware sections (one per slide) and chunk drafts that group slides."""
-    sections: list[SectionDraft] = []
-    for s in slides:
-        title = (s.title or f"Slide {s.slide_number}").strip()
-        if len(title) > 200:
-            title = title[:200]
-        sections.append(SectionDraft(title=title, level=1, page_start=s.slide_number))
+    """Build slide-aware sections (intelligent LLM outline with heuristic fallback) and chunk drafts."""
+    from bisect import bisect_right
+    from .chunker import _build_sections_via_llm, is_same_slide_topic
+
+    slide_candidates = [(s.slide_number, (s.title or f"Slide {s.slide_number}").strip()) for s in slides]
+
+    sections: list[SectionDraft] | None = None
+    if len(slides) >= 10:
+        sections = _build_sections_via_llm(slide_candidates, len(slides))
+
+    if not sections:
+        # Heuristic fallback: merge consecutive slides with identical/related topics
+        sections = []
+        for s in slides:
+            title = (s.title or f"Slide {s.slide_number}").strip()
+            if len(title) > 200:
+                title = title[:200]
+            if sections and is_same_slide_topic(sections[-1].title, title):
+                continue
+            sections.append(SectionDraft(title=title, level=1, page_start=s.slide_number))
+
+    if not sections:
+        sections = [SectionDraft(title="Presentation", level=1, page_start=1)]
+
+    # Map each slide number to the appropriate section_index
+    starts = [sec.page_start for sec in sections]
+
+    def _sec_idx_for_page(pno: int) -> int:
+        idx = bisect_right(starts, pno) - 1
+        return max(0, min(idx, len(sections) - 1))
 
     # Group slides into chunks of ~chunk_chars
     chunk_drafts: list[ChunkDraft] = []
     current_texts: list[str] = []
     current_pages: list[int] = []
     cur_len = 0
-    start_idx = 0
     ord_counter = 0
 
     def _flush():
-        nonlocal current_texts, current_pages, cur_len, start_idx, ord_counter
+        nonlocal current_texts, current_pages, cur_len, ord_counter
         if not current_texts:
             return
         text = "\n\n".join(current_texts).strip()
         if text:
+            first_pno = min(current_pages)
+            sec_idx = _sec_idx_for_page(first_pno)
             chunk_drafts.append(
                 ChunkDraft(
                     text=text,
-                    section_index=start_idx,
-                    section_title=sections[start_idx].title,
-                    page_start=min(current_pages),
+                    section_index=sec_idx,
+                    section_title=sections[sec_idx].title,
+                    page_start=first_pno,
                     page_end=max(current_pages),
                     ord=ord_counter,
                     is_code=False,
@@ -100,7 +126,7 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
         current_texts, current_pages, cur_len = [], [], 0
 
     tail = ""
-    for idx, s in enumerate(slides):
+    for s in slides:
         raw = (s.raw_text or "").strip()
         if not raw:
             continue
@@ -109,18 +135,18 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
             # flush current before splitting long slide
             if current_texts:
                 _flush()
-                start_idx = idx
                 tail = ""
             # split long slide text
             from .chunker import _split_long
 
             parts = _split_long(raw, chunk_chars, chunk_overlap)
+            sec_idx = _sec_idx_for_page(s.slide_number)
             for piece in parts:
                 chunk_drafts.append(
                     ChunkDraft(
                         text=piece,
-                        section_index=idx,
-                        section_title=sections[idx].title,
+                        section_index=sec_idx,
+                        section_title=sections[sec_idx].title,
                         page_start=s.slide_number,
                         page_end=s.slide_number,
                         ord=ord_counter,
@@ -128,23 +154,19 @@ def _slides_to_chunks(slides, chunk_chars: int, chunk_overlap: int) -> tuple[lis
                     )
                 )
                 ord_counter += 1
-            start_idx = idx + 1 if idx + 1 < len(slides) else idx
             continue
 
         if cur_len and cur_len + len(raw) + 2 > chunk_chars:
             _flush()
-            start_idx = idx
             if chunk_overlap > 0 and tail:
                 head = tail[-chunk_overlap:]
                 current_texts.append(head)
-                cur_len = len(head)
+                cur_len += len(head)
 
-        if not current_texts:
-            start_idx = idx
         current_texts.append(raw)
         current_pages.append(s.slide_number)
         cur_len += len(raw) + 2
-        tail = "\n\n".join(current_texts)
+        tail = raw
 
     _flush()
     return sections, chunk_drafts, 0
@@ -258,23 +280,51 @@ def ingest_book(book_id: int) -> None:
         if cover:
             book.cover_path = cover
 
+        # Clean up any existing sections and chunks for this book before writing new ones
+        book.content_start_section_id = None
+        db.flush()
+        old_sec_ids = list(db.scalars(select(Section.id).where(Section.book_id == book.id)))
+        if old_sec_ids:
+            from .models import (
+                ChatSession,
+                CodeBlock,
+                ConceptMention,
+                Flashcard,
+                KnowledgePoint,
+                Note,
+                Notebook,
+                QuizAttempt,
+                QuizError,
+                ReadingProgress,
+                SectionSummary,
+                VocabWord,
+            )
+            db.execute(delete(Chunk).where(Chunk.book_id == book.id))
+            db.execute(delete(ConceptMention).where(ConceptMention.section_id.in_(old_sec_ids)))
+            db.execute(delete(Flashcard).where(Flashcard.section_id.in_(old_sec_ids)))
+            db.execute(delete(QuizAttempt).where(QuizAttempt.section_id.in_(old_sec_ids)))
+            db.execute(delete(QuizError).where(QuizError.section_id.in_(old_sec_ids)))
+            db.execute(delete(SectionSummary).where(SectionSummary.section_id.in_(old_sec_ids)))
+            db.execute(delete(CodeBlock).where(CodeBlock.book_id == book.id))
+            db.execute(delete(ChatSession).where(ChatSession.section_id.in_(old_sec_ids)))
+            db.execute(delete(ReadingProgress).where(ReadingProgress.section_id.in_(old_sec_ids)))
+            db.execute(delete(VocabWord).where(VocabWord.section_id.in_(old_sec_ids)))
+            db.execute(delete(Note).where(Note.section_id.in_(old_sec_ids)))
+            db.execute(delete(KnowledgePoint).where(KnowledgePoint.section_id.in_(old_sec_ids)))
+            db.execute(delete(Notebook).where(Notebook.section_id.in_(old_sec_ids)))
+            db.execute(update(Section).where(Section.book_id == book.id).values(parent_id=None))
+            db.execute(delete(Section).where(Section.book_id == book.id))
+            db.flush()
+
         section_rows: list[Section] = []
         stack: list[Section] = []
         section_by_index: dict[int, Section] = {}
         for i, sec in enumerate(sections):
             if i < content_start_index:
                 continue
-            if is_slides:
-                # Each slide is a single page
+            end = sections[i + 1].page_start - 1 if i + 1 < len(sections) else book.num_pages
+            if end < sec.page_start:
                 end = sec.page_start
-            else:
-                end = sections[i + 1].page_start if i + 1 < len(sections) else book.num_pages
-                if end < sec.page_start:
-                    end = sec.page_start
-                else:
-                    # book sections use exclusive end (next start), convert to inclusive for page_end
-                    if i + 1 < len(sections):
-                        end = end - 1 if end > sec.page_start else end
             while stack and stack[-1].level >= sec.level:
                 stack.pop()
             parent_id = stack[-1].id if stack else None
@@ -449,11 +499,13 @@ def ingest_book(book_id: int) -> None:
         store = get_vector_store()
         total = len(chunk_drafts)
         done = 0
-        for start, batch_embeddings in embedding_client.embed_batches([d.text for d in chunk_drafts]):
+        texts = [d.text for d in chunk_drafts]
+        for start, batch_embeddings in embedding_client.embed_batches(texts):
+            end = start + len(batch_embeddings)
             store.add(
-                [d.text for d in chunk_drafts][start : start + len(batch_embeddings)],
+                texts[start:end],
                 batch_embeddings,
-                metas[start : start + len(batch_embeddings)],
+                metas[start:end],
             )
             done += len(batch_embeddings)
             logger.info("Embedded %d/%d chunks for book %d", done, total, book.id)
@@ -474,12 +526,16 @@ def ingest_book(book_id: int) -> None:
         db.commit()
         logger.info("Book %d ingested: %d sections, %d chunks (confirmed=%s)", book.id, len(sections), total, book.content_start_confirmed)
 
-        try:
-            from .routers.crossbook import extract_cross_book_links
-            result = extract_cross_book_links(db=db)
-            logger.info("Cross-book extraction after book %d: %s", book.id, result)
-        except Exception:
-            logger.debug("Cross-book extraction skipped after book %d", book.id)
+        # Cross-book extraction (skip for course slide batches to keep ingestion blazing fast)
+        from .models import CourseBook as _CourseBook
+        is_course_book = db.scalar(select(_CourseBook.id).where(_CourseBook.book_id == book.id).limit(1)) is not None
+        if not is_course_book:
+            try:
+                from .routers.crossbook import extract_cross_book_links
+                result = extract_cross_book_links(db=db)
+                logger.info("Cross-book extraction after book %d: %s", book.id, result)
+            except Exception:
+                logger.debug("Cross-book extraction skipped after book %d", book.id)
 
         # Lazy code extraction: skip auto extraction on ingest to save free-tier quota.
         # Code blocks will be extracted on demand when user opens the Code tab.

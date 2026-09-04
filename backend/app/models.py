@@ -198,6 +198,8 @@ class KnowledgePoint(Base):
     name: Mapped[str] = mapped_column(String(300))
     description: Mapped[str] = mapped_column(Text)
     difficulty: Mapped[float] = mapped_column(Float, default=0.5)
+    importance: Mapped[str] = mapped_column(String(20), default="core")
+    bloom_level: Mapped[str] = mapped_column(String(20), default="understand")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     book: Mapped[Book] = relationship()
@@ -260,6 +262,7 @@ class ConceptEdge(Base):
     target_point_id: Mapped[int] = mapped_column(ForeignKey("knowledge_points.id"))
     relationship_type: Mapped[str] = mapped_column(String(50))
     strength: Mapped[float] = mapped_column(Float, default=0.5)
+    explanation: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     source: Mapped[KnowledgePoint] = relationship(foreign_keys="ConceptEdge.source_point_id")
@@ -452,3 +455,90 @@ class CourseBook(Base):
 
     course: Mapped[Course] = relationship(back_populates="books")
     book: Mapped[Book] = relationship()
+
+
+# ---------------------------------------------------------------------------
+# Clean canonical Knowledge Graph — global dedup across Library & Courses
+# One Concept per meaning-in-context; recurrence = ConceptMention
+# ---------------------------------------------------------------------------
+
+
+class Concept(Base):
+    """Canonical concept — one row per meaning-in-context, never duplicated."""
+
+    __tablename__ = "concepts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    canonical_name: Mapped[str] = mapped_column(String(300))
+    canonical_name_norm: Mapped[str] = mapped_column(String(300), index=True)
+    canonical_description: Mapped[str] = mapped_column(Text)
+    difficulty: Mapped[float] = mapped_column(Float, default=0.5)
+    importance: Mapped[str] = mapped_column(String(20), default="core")
+    bloom_level: Mapped[str] = mapped_column(String(20), default="understand")
+    why_it_matters: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # No UniqueConstraint on norm — same term with different context yields separate rows (e.g., "normalization" DB vs ML)
+
+    mentions: Mapped[list["ConceptMention"]] = relationship(back_populates="concept", cascade="all, delete-orphan")
+    aliases: Mapped[list["ConceptAlias"]] = relationship(back_populates="concept", cascade="all, delete-orphan")
+
+
+class ConceptMention(Base):
+    """Provenance — one row per occurrence of a Concept in a specific book/section."""
+
+    __tablename__ = "concept_mentions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    concept_id: Mapped[int] = mapped_column(ForeignKey("concepts.id", ondelete="CASCADE"), index=True)
+    book_id: Mapped[int] = mapped_column(ForeignKey("books.id", ondelete="CASCADE"), index=True)
+    section_id: Mapped[int] = mapped_column(ForeignKey("sections.id", ondelete="CASCADE"), index=True)
+    # denormalized for fast filtering / display without joins
+    section_title_snapshot: Mapped[str] = mapped_column(String(400), default="")
+    snippet: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("concept_id", "book_id", "section_id", name="uq_concept_mention"),)
+
+    concept: Mapped[Concept] = relationship(back_populates="mentions")
+    book: Mapped[Book] = relationship()
+    section: Mapped[Section] = relationship()
+
+
+class ConceptAlias(Base):
+    """Synonym / surface-form alias for a canonical concept."""
+
+    __tablename__ = "concept_aliases"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    concept_id: Mapped[int] = mapped_column(ForeignKey("concepts.id", ondelete="CASCADE"), index=True)
+    alias_term: Mapped[str] = mapped_column(String(300))
+    alias_norm: Mapped[str] = mapped_column(String(300), index=True)
+    source_book_id: Mapped[int | None] = mapped_column(ForeignKey("books.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("concept_id", "alias_norm", name="uq_concept_alias_norm"),)
+
+    concept: Mapped[Concept] = relationship(back_populates="aliases")
+
+
+class ConceptRelation(Base):
+    """Typed edge between canonical concepts — the only edge table (intra + inter unified)."""
+
+    __tablename__ = "concept_relations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    source_concept_id: Mapped[int] = mapped_column(ForeignKey("concepts.id", ondelete="CASCADE"), index=True)
+    target_concept_id: Mapped[int] = mapped_column(ForeignKey("concepts.id", ondelete="CASCADE"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String(30))  # prerequisite|builds_on|related|contrasts_with|analogous
+    strength: Mapped[float] = mapped_column(Float, default=0.5)
+    explanation_long: Mapped[str] = mapped_column(Text, default="")
+    explanation_short: Mapped[str] = mapped_column(String(500), default="")
+    evidence_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("source_concept_id", "target_concept_id", name="uq_concept_relation"),)
+
+    source: Mapped[Concept] = relationship(foreign_keys="ConceptRelation.source_concept_id")
+    target: Mapped[Concept] = relationship(foreign_keys="ConceptRelation.target_concept_id")

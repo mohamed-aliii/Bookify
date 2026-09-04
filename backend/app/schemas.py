@@ -1,6 +1,7 @@
 import datetime
 from typing import Literal
 
+# pyrefly: ignore [missing-import]
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
@@ -243,6 +244,8 @@ class KnowledgePointOut(BaseModel):
     name: str
     description: str
     difficulty: float
+    importance: str = "core"
+    bloom_level: str = "understand"
 
 
 class UserKnowledgePointOut(BaseModel):
@@ -309,8 +312,13 @@ class ConceptGraphNode(BaseModel):
     description: str
     difficulty: float
     mastery: float | None
+    importance: str = "core"
+    bloom_level: str = "understand"
+    why_it_matters: str = ""
     section_id: int
     section_title: str
+    book_id: int | None = None
+    book_title: str | None = None
 
 
 class ConceptGraphEdge(BaseModel):
@@ -319,6 +327,7 @@ class ConceptGraphEdge(BaseModel):
     target: int
     relationship_type: str
     strength: float
+    explanation: str | None = None
 
 
 class ConceptGraphOut(BaseModel):

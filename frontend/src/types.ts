@@ -293,8 +293,13 @@ export interface ConceptGraphNode {
   description: string
   difficulty: number
   mastery: number | null
+  importance?: string
+  bloom_level?: string
+  why_it_matters?: string
   section_id: number
   section_title: string
+  book_id?: number | null
+  book_title?: string | null
 }
 
 export interface ConceptGraphEdge {
@@ -303,6 +308,7 @@ export interface ConceptGraphEdge {
   target: number
   relationship_type: string
   strength: number
+  explanation?: string | null
 }
 
 export interface ConceptGraph {
@@ -411,10 +417,33 @@ export interface CrossBookLink {
   similarity: number
   relationship_label: string
   explanation: string
+  explanation_short?: string | null
   source_book_title: string | null
   target_book_title: string | null
   source_kp_name: string | null
   target_kp_name: string | null
+}
+
+export interface CanonicalConcept {
+  id: number
+  canonical_name: string
+  canonical_description: string
+  difficulty: number
+  mention_count: number
+  aliases: string[]
+  mentions: { book_id: number; book_title: string; section_id: number; section_title: string }[]
+}
+
+export interface ConceptDetail {
+  id: number
+  canonical_name: string
+  canonical_description: string
+  difficulty: number
+  aliases: string[]
+  mentions: { id: number; book_id: number; book_title: string; section_id: number; section_title: string; snippet: string | null }[]
+  relations: { id: number; direction: string; other_concept_id: number; other_name: string; relationship_type: string; strength: number; explanation_long: string; explanation_short: string }[]
+  courses_involved: number[]
+  books_involved: number[]
 }
 
 export interface ConceptCluster {
