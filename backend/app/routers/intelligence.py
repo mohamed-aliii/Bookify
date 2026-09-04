@@ -465,7 +465,7 @@ def _extract_section_kps(db: Session, book_id: int, section: Section, force: boo
     concepts_created = 0
     name_to_concept_id: dict[str, int] = {}
     name_to_kp_id: dict[str, int] = {}
-    concept_prereqs: dict[int, list[str]] = {}
+    concept_prereqs: dict[int, list[dict[str, str]]] = {}
 
     for item in items:
         name = str(item.get("name", "")).strip()
@@ -500,7 +500,17 @@ def _extract_section_kps(db: Session, book_id: int, section: Section, force: boo
 
         name_to_concept_id[norm] = concept_id
         if prereqs:
-            concept_prereqs[concept_id] = [str(p).strip() for p in prereqs if str(p).strip()]
+            parsed_prereqs: list[dict[str, str]] = []
+            for p in prereqs:
+                if isinstance(p, dict):
+                    pn = str(p.get("name", "")).strip()
+                    pr = str(p.get("reason", "")).strip()
+                    if pn:
+                        parsed_prereqs.append({"name": pn, "reason": pr})
+                elif isinstance(p, str) and p.strip():
+                    parsed_prereqs.append({"name": p.strip(), "reason": ""})
+            if parsed_prereqs:
+                concept_prereqs[concept_id] = parsed_prereqs
 
         # Maintain legacy KnowledgePoint
         legacy_kp = db.scalar(
@@ -524,23 +534,52 @@ def _extract_section_kps(db: Session, book_id: int, section: Section, force: boo
 
     # 3. Create intra-chapter prerequisite relations automatically from prerequisites
     for target_cid, prereq_list in concept_prereqs.items():
-        for p_name in prereq_list:
+        tgt_concept = db.get(Concept, target_cid)
+        for p_item in prereq_list:
+            p_name = p_item["name"]
+            p_reason = p_item.get("reason", "").strip()
             p_norm = _norm_name(p_name)
             source_cid = name_to_concept_id.get(p_norm)
-            if source_cid and source_cid != target_cid:
-                exists_cr = db.scalar(select(ConceptRelation).where(
-                    ConceptRelation.source_concept_id == source_cid,
-                    ConceptRelation.target_concept_id == target_cid,
-                ).limit(1))
-                if exists_cr is None:
-                    db.add(ConceptRelation(
-                        source_concept_id=source_cid,
-                        target_concept_id=target_cid,
-                        relationship_type="prerequisite",
-                        strength=0.85,
-                        explanation_short=f"{p_name} is a foundational prerequisite.",
-                        explanation_long=f"Mastering {p_name} provides the necessary conceptual foundation to understand this concept.",
-                    ))
+            if not source_cid or source_cid == target_cid:
+                continue
+
+            src_concept = db.get(Concept, source_cid)
+
+            # Pedagogically rich explanation: bridges the two concepts and explains why understanding breaks without it
+            if p_reason and len(p_reason) >= 20:
+                expl_long = p_reason
+                expl_short = p_reason[:140] + ("…" if len(p_reason) > 140 else "")
+            elif src_concept and tgt_concept:
+                expl_long = (
+                    f"{src_concept.canonical_name} ({src_concept.canonical_description.rstrip('.')}) provides "
+                    f"the foundational mechanics required to understand {tgt_concept.canonical_name} "
+                    f"({tgt_concept.canonical_description.rstrip('.')}). Without mastering this foundation, "
+                    f"the principles and implementation of {tgt_concept.canonical_name} cannot be effectively applied."
+                )
+                expl_short = f"{src_concept.canonical_name} provides the foundational concepts required to master {tgt_concept.canonical_name}."
+            else:
+                expl_long = f"Understanding {p_name} is essential before studying this concept."
+                expl_short = f"{p_name} is a foundational prerequisite."
+
+            strength = 0.90 if (src_concept and tgt_concept and src_concept.importance == "core" and tgt_concept.importance == "core") else 0.80
+
+            exists_cr = db.scalar(select(ConceptRelation).where(
+                ConceptRelation.source_concept_id == source_cid,
+                ConceptRelation.target_concept_id == target_cid,
+            ).limit(1))
+            if exists_cr is None:
+                db.add(ConceptRelation(
+                    source_concept_id=source_cid,
+                    target_concept_id=target_cid,
+                    relationship_type="prerequisite",
+                    strength=strength,
+                    explanation_short=expl_short,
+                    explanation_long=expl_long,
+                ))
+            elif "Mastering" in (exists_cr.explanation_long or "") and expl_long:
+                exists_cr.explanation_long = expl_long
+                exists_cr.explanation_short = expl_short
+                exists_cr.strength = strength
 
             source_kpid = name_to_kp_id.get(p_norm)
             target_norm = next((n for n, cid in name_to_concept_id.items() if cid == target_cid), None)
@@ -555,9 +594,12 @@ def _extract_section_kps(db: Session, book_id: int, section: Section, force: boo
                         source_point_id=source_kpid,
                         target_point_id=target_kpid,
                         relationship_type="prerequisite",
-                        strength=0.85,
-                        explanation=f"{p_name} is a foundational prerequisite.",
+                        strength=strength,
+                        explanation=expl_long,
                     ))
+                elif "is a foundational prerequisite" in (exists_ce.explanation or ""):
+                    exists_ce.explanation = expl_long
+                    exists_ce.strength = strength
 
     db.flush()
     return concepts_created

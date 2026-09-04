@@ -946,18 +946,36 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                     </div>
                     <div className="flex-1 min-h-0 overflow-y-auto p-4">
                       <div className="grid grid-cols-2 gap-2">
-                        <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5">
-                          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Source TXT</div>
-                          <div className="mt-1 text-xs font-semibold text-slate-200 line-clamp-2">{srcNode?.name || `#${srcId}`}</div>
+                        <button
+                          type="button"
+                          onClick={() => { if (srcNode) { setSelected(srcNode); setSelectedLink(null); } }}
+                          className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5 text-left transition-colors hover:bg-white/[0.07] hover:border-indigo-500/30 group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                              {selectedLink.relationship_type === 'prerequisite' ? 'Prerequisite' : 'Source Concept'}
+                            </span>
+                            <span className="text-[10px] text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">Focus ↗</span>
+                          </div>
+                          <div className="mt-1 text-xs font-semibold text-slate-200 line-clamp-2 group-hover:text-indigo-300 transition-colors">{srcNode?.name || `#${srcId}`}</div>
                           <div className="mt-1 text-[11px] leading-relaxed text-slate-400 line-clamp-4">{srcNode?.description || '—'}</div>
                           {srcNode && (srcNode as any).book_title && <div className="mt-1.5 text-[10px] text-slate-500 truncate">{(srcNode as any).book_title} · {(srcNode as any).section_title || ''}</div>}
-                        </div>
-                        <div className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5">
-                          <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Target TXT</div>
-                          <div className="mt-1 text-xs font-semibold text-slate-200 line-clamp-2">{tgtNode?.name || `#${tgtId}`}</div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => { if (tgtNode) { setSelected(tgtNode); setSelectedLink(null); } }}
+                          className="rounded-xl border border-white/[0.06] bg-white/[0.03] p-2.5 text-left transition-colors hover:bg-white/[0.07] hover:border-indigo-500/30 group"
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                              {selectedLink.relationship_type === 'prerequisite' ? 'Target Concept' : 'Target Concept'}
+                            </span>
+                            <span className="text-[10px] text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity">Focus ↗</span>
+                          </div>
+                          <div className="mt-1 text-xs font-semibold text-slate-200 line-clamp-2 group-hover:text-indigo-300 transition-colors">{tgtNode?.name || `#${tgtId}`}</div>
                           <div className="mt-1 text-[11px] leading-relaxed text-slate-400 line-clamp-4">{tgtNode?.description || '—'}</div>
                           {tgtNode && (tgtNode as any).book_title && <div className="mt-1.5 text-[10px] text-slate-500 truncate">{(tgtNode as any).book_title} · {(tgtNode as any).section_title || ''}</div>}
-                        </div>
+                        </button>
                       </div>
                       <h4 className="mt-4 text-[11px] font-semibold uppercase tracking-wider text-slate-400">Why they connect</h4>
                       <div className="mt-2 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3.5">
@@ -974,7 +992,7 @@ export default function ConceptGraphView({ bookId }: ConceptGraphProps) {
                         </div>
                       </div>
                       <div className="mt-4 rounded-xl bg-indigo-500/10 p-3 text-[11px] leading-relaxed text-indigo-200/80">
-                        Source and target TXT shown above — explanation bridges these two texts. Click source or target to pin that concept.
+                        Conceptual bridge connecting the foundation and target concept. Click either concept card above to focus that node in the 3D graph.
                       </div>
                     </div>
                     <div className="border-t border-white/[0.06] p-3">

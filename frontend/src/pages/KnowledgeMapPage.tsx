@@ -630,15 +630,15 @@ function KnowledgeMapContent() {
                             </div>
                             <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                               <div className="rounded-lg border border-white/[0.04] bg-black/20 px-2 py-1.5">
-                                <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Source TXT</div>
+                                <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Source Concept</div>
                                 <div className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{(c as any).sourceTxt?.slice(0,120) || selected?.description?.slice(0,120) || '—'}</div>
                               </div>
                               <div className="rounded-lg border border-white/[0.04] bg-black/20 px-2 py-1.5">
-                                <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Target TXT</div>
+                                <div className="text-[9px] font-semibold uppercase tracking-wider text-slate-500">Target Concept</div>
                                 <div className="mt-0.5 line-clamp-2 text-[11px] leading-relaxed text-slate-400">{(c as any).targetTxt?.slice(0,120) || c.name}</div>
                               </div>
                             </div>
-                            {(c as any).expl && <div className="mt-1.5 rounded-lg bg-white/[0.02] px-2 py-1.5 text-[11px] leading-relaxed text-slate-300 border border-white/[0.04]"><span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Why they connect: </span>{(c as any).expl.slice(0,220)}{(c as any).expl.length>220?'…':''}</div>}
+                            {(c as any).expl && <div className="mt-1.5 rounded-lg bg-white/[0.02] px-2 py-1.5 text-[11px] leading-relaxed text-slate-300 border border-white/[0.04]"><span className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">Why they connect: </span>{(c as any).expl}</div>}
                           </div>
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-3.5 w-3.5 shrink-0 text-slate-600"><path d="M9 18l6-6-6-6" strokeLinecap="round" strokeLinejoin="round"/></svg>
                         </button>
